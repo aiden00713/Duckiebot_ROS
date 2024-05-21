@@ -13,6 +13,8 @@ from std_msgs.msg import String, Float32
 W_LEFT = 1.2 * (2 * math.pi) #表示每秒左輪轉1.2圈
 W_RIGHT = 1.2* (2 * math.pi) #表示每秒右輪轉1.2圈
 Par = (2*math.pi) #完整弧度 = 360度
+TURN_SPEED = 0.5  # Adjust this value to control turn sharpness
+TURN_DURATION = 50  # Number of iterations to keep turning left
 
 class WheelControlNode(DTROS):
     def __init__(self, node_name):
@@ -31,6 +33,7 @@ class WheelControlNode(DTROS):
         self._vel_left = W_LEFT * wheel_radius
         self._vel_right = W_RIGHT * wheel_radius
         Par *= wheel_radius
+        self.counter = 0  # Initialize counter
 
 
         #topic for tof 測量距離
@@ -38,6 +41,9 @@ class WheelControlNode(DTROS):
 
         # Topic for camera node angles
         self._angle_topic = f"/{vehicle_name}/camera_node/angles"
+
+        # Topic for camera node dist
+        self._dist_topic = f"/{vehicle_name}/camera_node/dist"
 
         # construct publisher and subscriber
         self.mul = 0
@@ -79,6 +85,29 @@ class WheelControlNode(DTROS):
             r = -par / 40 * Par
         return l, r
 
+
+    def turn_left(self):
+        left = self._vel_left * TURN_SPEED
+        right = self._vel_right
+
+        message = WheelsCmdStamped(vel_left=left, vel_right=right)
+        self._publisher.publish(message)
+
+
+    def on_shutdown(self):
+        if hasattr(self, '_publisher'):
+            stop = WheelsCmdStamped(vel_left=0, vel_right=0)
+            self._publisher.publish(stop)
+        print("Shut down completed")
+
+
+        '''stop = WheelsCmdStamped(vel_left=0, vel_right=0)
+        for _ in range(2):
+            self._publisher.publish(stop)
+        print("SHUT_DOWN")
+        sys.exit()'''
+
+
     def run(self):
         # publish 1 messages every second.
         rate = rospy.Rate(10)
@@ -95,20 +124,7 @@ class WheelControlNode(DTROS):
             pre = self.mul
             rate.sleep()
 
-
-    def on_shutdown(self):
-        if hasattr(self, '_publisher'):
-            stop = WheelsCmdStamped(vel_left=0, vel_right=0)
-            self._publisher.publish(stop)
-        print("Shut down completed")
-
-
-        '''stop = WheelsCmdStamped(vel_left=0, vel_right=0)
-        for _ in range(2):
-            self._publisher.publish(stop)
-        print("SHUT_DOWN")
-        sys.exit()'''
-
+    
 
 if __name__ == '__main__':
     # create the node
