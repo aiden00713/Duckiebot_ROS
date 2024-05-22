@@ -94,7 +94,8 @@ class WheelControlNode(DTROS):
         # Topics for ToF sensor and camera node angles & dist
         self._tof = f"/{self._vehicle_name}/front_center_tof_driver_node/range"
         self._angle_topic = f"/{self._vehicle_name}/camera_node/angles"
-        self._dist_topic = f"/{self.vehicle_name}/camera_node/dist"
+        self._right_dist_topic = f"/{self.vehicle_name}/camera_node/right_dist"
+        self._left_dist_topic = f"/{self.vehicle_name}/camera_node/left_dist"
 
         # Construct publisher and subscriber
         self.mul = 0
@@ -103,8 +104,9 @@ class WheelControlNode(DTROS):
         self.receiver = rospy.Subscriber("Duckie", String, self.call)
         self._publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
         self.distance = rospy.Subscriber(self._tof, Range, self.dis)
-        self.angle_subscriber = rospy.Subscriber(self._angle_topic, Float32, self.angle_callback)
-        self.dist_subscriber = rospy.Subscriber(self._dist_topic, Float32, self.dist_callback)
+        #self.angle_subscriber = rospy.Subscriber(self._angle_topic, Float32, self.angle_callback)
+        self.right_dist_subscriber = rospy.Subscriber(self._right_dist_topic, Float32, self.right_dist_callback)
+        self.left_dist_subscriber = rospy.Subscriber(self._left_dist_topic, Float32, self.left_dist_callback)
 
         # Bridge between OpenCV and ROS
         self._bridge = CvBridge()
@@ -157,17 +159,29 @@ class WheelControlNode(DTROS):
             for _ in range(TURN_DURATION):
                 self.turn_left()
     
-    # under 200 turn right
-    def dist_callback(self, msg):
+    # under 340 turn right
+    def right_dist_callback(self, msg):
         dist = msg.data
-        rospy.loginfo(f"Received inter. dist: {dist")
-        if dist < 200:  
+        rospy.loginfo(f"Received RIGHT inter. dist: {dist}")
+        if dist < 340:  
             for _ in range(TURN_DURATION):
                 self.turn_right()
         else:
             for _ in range(TURN_DURATION):
                 self.forward()
+    
+    
+    def left_dist_callback(self, msg):
+        dist = msg.data
+        rospy.loginfo(f"Received LEFT inter. dist: {dist}")
+        if dist < 340:  
+            for _ in range(TURN_DURATION):
+                self.turn_left()
+        else:
+            for _ in range(TURN_DURATION):
+                self.forward()
 
+    
     def camera_callback(self, msg):
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
         left_processed_image, left_lines = detect_lane(image, self.left_roi_points)

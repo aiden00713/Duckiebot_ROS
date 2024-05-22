@@ -68,6 +68,7 @@ def detect_lane(frame, roi_points):
     dst_pts = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
     src_pts = pts2.astype(np.float32)
     M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+    # 影像透視 不規則圖形轉平面
     warped = cv2.warpPerspective(cropped, M, (w, h))
 
     red = warped[:, :, 2]
@@ -83,11 +84,11 @@ def detect_lane(frame, roi_points):
         for line in lines:
             x1, y1, x2, y2 = line[:4]
             angle = angle_with_horizontal(x1, y1, x2, y2)
-            if angle is not None and (angle > 75 or angle == 0):
+            if angle is not None and (angle > 75):
                 detected_right_angle = True
-                cv2.line(warped, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.line(warped, (x1, y1), (x2, y2), (0, 0, 255), 2) #red:right_angle
             else:
-                cv2.line(warped, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.line(warped, (x1, y1), (x2, y2), (0, 255, 0), 2) #blue:only line
     else:
         rospy.loginfo("No lines detected")
 
@@ -135,14 +136,15 @@ class CameraReaderNode(DTROS):
         self.angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/angles", Float32, queue_size=10)
 
         #publisher inter_dis
-        self.inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/dist", Float32, queue_size=10)
+        self.right_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/right_dist", Float32, queue_size=10)
+        self.left_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/left_dist", Float32, queue_size=10)
 
         # 定義左右平行四邊形區域 ROI
         #self.left_roi_points = np.array([[100, 0], [200, 0], [100, 480], [200, 480]], np.int32).reshape((-1, 1, 2))
         #self.right_roi_points = np.array([[400, 0], [600, 0], [400, 480], [600, 480]], np.int32).reshape((-1, 1, 2))
 
         self.left_roi_points = np.array([[100, 200], [200, 200], [200, 400], [100, 400]], np.int32).reshape((-1, 1, 2))
-        self.right_roi_points = np.array([[450, 200], [550, 200], [550, 400], [450, 400]], np.int32).reshape((-1, 1, 2))
+        self.right_roi_points = np.array([[350, 200], [450, 200], [450, 400], [350, 400]], np.int32).reshape((-1, 1, 2))
 
     def callback(self, msg):
         # convert JPEG bytes to CV image
@@ -163,12 +165,19 @@ class CameraReaderNode(DTROS):
         print(f"Left Steering Angle: {left_steering_angle:.2f} degrees")
         print(f"Right Steering Angle: {right_steering_angle:.2f} degrees")
 
-        if left_detected_right_angle or right_detected_right_angle:
-            rospy.loginfo("Detected right angle.")
+        if right_detected_right_angle:
+            rospy.loginfo("Detected RIGHT_ROI right angle.")
             height, width = image.shape[:2]
-            dist = distance(left_lines[0][0], left_lines[0][1], width, height) if left_detected_right_angle else distance(right_lines[0][0], right_lines[0][1], width, height)
-            rospy.loginfo(f"Intersection Distance: {dist:.2f}")
-            self.inter_dist_pub.publish(Float32(dist))
+            dist = distance(right_lines[0][0], right_lines[0][1], width, height)
+            rospy.loginfo(f"RIGHT_ROI Intersection Distance: {dist:.2f}")
+            self.right_inter_dist_pub.publish(Float32(dist))
+
+        if left_detected_right_angle:
+            rospy.loginfo("Detected LEFT_ROI right angle.")
+            height, width = image.shape[:2]
+            dist = distance(left_lines[0][0], left_lines[0][1], width, height)
+            rospy.loginfo(f"LEFT_ROI Intersection Distance: {dist:.2f}")
+            self.left_inter_dist_pub.publish(Float32(dist))
 
 
         self.angle_pub.publish(Float32((left_steering_angle + right_steering_angle) / 2))
