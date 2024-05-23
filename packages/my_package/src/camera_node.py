@@ -18,6 +18,7 @@ def angle_with_horizontal(x1, y1, x2, y2):
         return None
     else:
         if angle > 30 and angle < 165:
+            #print(f"Angle: {angle:.2f} degrees")
             return angle
         else:
             return None
@@ -60,6 +61,34 @@ def lookup_xtable(distance):
     else:
         return 0
 
+def calculate_slope(x1, y1, x2, y2):
+    if x2 - x1 == 0:  # Avoid division by zero
+        return None  # Vertical line
+    return (y2 - y1) / (x2 - x1)
+
+def calculate_angle(slope1, slope2):
+    if slope1 is None or slope2 is None:  # One of the lines is vertical
+        return 90
+    tan_theta = abs((slope2 - slope1) / (1 + slope1 * slope2))
+    return np.degrees(np.arctan(tan_theta))
+
+def line_intersection(line1, line2):
+    # Unpack points
+    x1, y1, x2, y2 = line1
+    x3, y3, x4, y4 = line2
+
+    # Calculate determinant
+    det = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3)
+    if det == 0:
+        return None  # lines are parallel
+
+    # Calculate the intersection point
+    det1 = x1 * y2 - y1 * x2
+    det2 = x3 * y4 - y3 * x4
+    x = (det1 * (x3 - x4) - (x1 - x2) * det2) / det
+    y = (det1 * (y3 - y4) - (y1 - y2) * det2) / det
+    return x, y
+
 def detect_lane(frame, roi_points):
     rect = cv2.boundingRect(roi_points)
     x, y, w, h = rect
@@ -68,29 +97,49 @@ def detect_lane(frame, roi_points):
     dst_pts = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
     src_pts = pts2.astype(np.float32)
     M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-    # 影像透視 不規則圖形轉平面
     warped = cv2.warpPerspective(cropped, M, (w, h))
 
     red = warped[:, :, 2]
-    # Apply Gaussian blur to remove noise and shadows
     gaussian = cv2.GaussianBlur(red, (7, 7), 0)
 
-    # 使用 EDLines 进行线段检测
-    lines = LineSegmentDetectionED(gaussian, min_line_len=20, line_fit_err_thres=1.4)
-    
-    # 判斷路口直角
+    # Placeholder function for line detection, replace with your actual function call
+    lines = LineSegmentDetectionED(gaussian, min_line_len=30, line_fit_err_thres=1.6)
+
     detected_right_angle = False
-    if lines is not None:
-        for line in lines:
-            x1, y1, x2, y2 = line[:4]
-            angle = angle_with_horizontal(x1, y1, x2, y2)
-            if angle is not None and (angle > 75):
-                detected_right_angle = True
-                cv2.line(warped, (x1, y1), (x2, y2), (0, 0, 255), 2) #red:right_angle
-            else:
-                cv2.line(warped, (x1, y1), (x2, y2), (0, 255, 0), 2) #blue:only line
+    if lines is not None and len(lines) > 1:
+        for i in range(len(lines)):
+            for j in range(i + 1, len(lines)):
+                line1 = lines[i]
+                line2 = lines[j]
+                #x1, y1, x2, y2 = line1[:4]
+                #x3, y3, x4, y4 = line2[:4]
+                intersection = line_intersection(line1, line2)
+
+                '''
+                slope1 = calculate_slope(x1, y1, x2, y2)
+                slope2 = calculate_slope(x3, y3, x4, y4)
+                angle = calculate_angle(slope1, slope2)
+                mid_x1, mid_y1 = (x1 + x2) // 2, (y1 + y2) // 2
+                '''
+                if intersection is not None:
+                    x1, y1, x2, y2 = line1
+                    x3, y3, x4, y4 = line2
+                    slope1 = calculate_slope(x1, y1, x2, y2)
+                    slope2 = calculate_slope(x3, y3, x4, y4)
+                    angle = calculate_angle(slope1, slope2)
+                    mid_x1, mid_y1 = (x1 + x2) // 2, (y1 + y2) // 2
+
+                if 60 <= angle <= 75:  # Checking for near-right angles
+                    detected_right_angle = True
+                    cv2.line(warped, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red: right angle
+                    cv2.line(warped, (x3, y3), (x4, y4), (0, 0, 255), 2)  # Red: right angle
+                    cv2.putText(warped, f"{angle:.2f} ", (mid_x1, mid_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                else:
+                    cv2.line(warped, (x1, y1), (x2, y2), (255, 0, 0), 2)  # Blue: only line
+                    cv2.line(warped, (x3, y3), (x4, y4), (255, 0, 0), 2)  # Blue: only line
+                    #cv2.putText(warped, f"{angle:.2f} ", (mid_x1, mid_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
     else:
-        rospy.loginfo("No lines detected")
+        rospy.loginfo("No lines detected or insufficient lines for angle calculation")
 
     return warped, lines, detected_right_angle
 
@@ -143,8 +192,11 @@ class CameraReaderNode(DTROS):
         #self.left_roi_points = np.array([[100, 0], [200, 0], [100, 480], [200, 480]], np.int32).reshape((-1, 1, 2))
         #self.right_roi_points = np.array([[400, 0], [600, 0], [400, 480], [600, 480]], np.int32).reshape((-1, 1, 2))
 
-        self.left_roi_points = np.array([[100, 200], [200, 200], [200, 400], [100, 400]], np.int32).reshape((-1, 1, 2))
+        self.left_roi_points = np.array([[150, 200], [200, 200], [200, 400], [150, 400]], np.int32).reshape((-1, 1, 2))
         self.right_roi_points = np.array([[350, 200], [450, 200], [450, 400], [350, 400]], np.int32).reshape((-1, 1, 2))
+
+        # Dictionary to store intersection data
+        self.intersection_data = {}
 
     def callback(self, msg):
         # convert JPEG bytes to CV image
@@ -158,7 +210,7 @@ class CameraReaderNode(DTROS):
         right_processed_image, right_lines, right_detected_right_angle = detect_lane(image, self.right_roi_points)
 
         if left_steering_angle != 0 or right_steering_angle != 0:
-                self.angle_callback(Float32((left_steering_angle + right_steering_angle) / 2))
+            self.angle_callback(Float32((left_steering_angle + right_steering_angle) / 2))
 
         left_steering_angle = calculate_steering_angle(left_lines)
         right_steering_angle = calculate_steering_angle(right_lines)
@@ -171,6 +223,7 @@ class CameraReaderNode(DTROS):
             dist = distance(right_lines[0][0], right_lines[0][1], width, height)
             rospy.loginfo(f"RIGHT_ROI Intersection Distance: {dist:.2f}")
             self.right_inter_dist_pub.publish(Float32(dist))
+
 
         if left_detected_right_angle:
             rospy.loginfo("Detected LEFT_ROI right angle.")
@@ -205,6 +258,13 @@ class CameraReaderNode(DTROS):
         #cv2.imshow(self._window, combined_image)
         cv2.waitKey(1)
     
+    def store_intersection_data(self, intersection_point, angle):
+        """Stores the intersection data in the dictionary."""
+        if intersection_point:
+            self.intersection_data['point'] = intersection_point
+            self.intersection_data['angle'] = angle
+            # You can publish this data or log it
+            rospy.loginfo(f"Stored intersection point: {intersection_point}, angle: {angle}")
 
     def process_image(self, src):
         # Get dimensions of the image
