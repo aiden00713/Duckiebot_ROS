@@ -35,8 +35,8 @@ class WheelControlNode(DTROS):
         # Topics for ToF sensor and camera node angles & dist
         self._tof = f"/{self._vehicle_name}/front_center_tof_driver_node/range"
         self._angle_topic = f"/{self._vehicle_name}/camera_node/angles"
-        self._right_dist_topic = f"/{self.vehicle_name}/camera_node/right_dist"
-        self._left_dist_topic = f"/{self.vehicle_name}/camera_node/left_dist"
+        self._right_dist_topic = f"/{self._vehicle_name}/camera_node/right_dist"
+        self._left_dist_topic = f"/{self._vehicle_name}/camera_node/left_dist"
 
         # Construct publisher and subscriber
         self.mul = 0
@@ -57,10 +57,8 @@ class WheelControlNode(DTROS):
     def on_shutdown(self):
         # This function is called when you press Ctrl+C
         rospy.loginfo("Shutting down: Stopping the motors")
-        stop = WheelsCmdStamped()
-        stop.vel_left = 0.0
-        stop.vel_right = 0.0
-        self._publisher.publish(stop)
+        message = WheelsCmdStamped(vel_left=0, vel_right=0)
+        self._publisher.publish(message)
         print("Shut down completed")
 
     def call(self, data):
