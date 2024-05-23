@@ -106,6 +106,8 @@ def detect_lane(frame, roi_points):
     lines = LineSegmentDetectionED(gaussian, min_line_len=30, line_fit_err_thres=1.6)
 
     detected_right_angle = False
+    angle = 0
+
     if lines is not None and len(lines) > 1:
         for i in range(len(lines)):
             for j in range(i + 1, len(lines)):
@@ -128,20 +130,23 @@ def detect_lane(frame, roi_points):
                     slope2 = calculate_slope(x3, y3, x4, y4)
                     angle = calculate_angle(slope1, slope2)
                     mid_x1, mid_y1 = (x1 + x2) // 2, (y1 + y2) // 2
+                else:
+                    rospy.loginfo("ROI NO Intersection")
 
                 if 60 <= angle <= 75:  # Checking for near-right angles
                     detected_right_angle = True
-                    cv2.line(warped, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red: right angle
-                    cv2.line(warped, (x3, y3), (x4, y4), (0, 0, 255), 2)  # Red: right angle
-                    cv2.putText(warped, f"{angle:.2f} ", (mid_x1, mid_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    cv2.line(gaussian, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red: right angle
+                    cv2.line(gaussian, (x3, y3), (x4, y4), (0, 0, 255), 2)  # Red: right angle
+                    cv2.putText(gaussian, f"{angle:.2f} ", (mid_x1, mid_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                 else:
-                    cv2.line(warped, (x1, y1), (x2, y2), (255, 0, 0), 2)  # Blue: only line
-                    cv2.line(warped, (x3, y3), (x4, y4), (255, 0, 0), 2)  # Blue: only line
-                    #cv2.putText(warped, f"{angle:.2f} ", (mid_x1, mid_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                    #rospy.loginfo("No degree between 60-75")
+                    cv2.line(gaussian, (x1, y1), (x2, y2), (255, 0, 0), 2)  # Blue: only line
+                    cv2.line(gaussian, (x3, y3), (x4, y4), (255, 0, 0), 2)  # Blue: only line
+                    #cv2.putText(gaussian, f"{angle:.2f} ", (mid_x1, mid_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
     else:
-        rospy.loginfo("No lines detected or insufficient lines for angle calculation")
+        rospy.loginfo("[ROI detect_lane] No lines detected or insufficient lines for angle calculation")
 
-    return warped, lines, detected_right_angle
+    return gaussian, lines, detected_right_angle
 
 
 def calculate_steering_angle(lines):
@@ -264,7 +269,7 @@ class CameraReaderNode(DTROS):
             self.intersection_data['point'] = intersection_point
             self.intersection_data['angle'] = angle
             # You can publish this data or log it
-            rospy.loginfo(f"Stored intersection point: {intersection_point}, angle: {angle}")
+            #rospy.loginfo(f"Stored intersection point: {intersection_point}, angle: {angle}")
 
     def process_image(self, src):
         # Get dimensions of the image
@@ -288,11 +293,15 @@ class CameraReaderNode(DTROS):
                     cv2.line(gaussian, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     # 添加角度文字
                     text_position = (min(x1, x2), min(y1, y2) + 20)  # 顯示角度的位置稍微在線段上方
-                    distance_value = lookup_xtable(x_distance(x1, width))
+                    distance_value = lookup_xtable(x_distance(x1, width)) 
                     cv2.putText(gaussian, f"{distance_value:.2f}", text_position, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                     # ros publisher
                     self.angle_pub.publish(Float32(angle))
-        
+                else:
+                    rospy.loginfo("[process_image] No lines detected or insufficient lines for angle calculation")
+        else:
+            rospy.loginfo("[process_image] No lines detected")
+
         return gaussian
 
 if __name__ == '__main__':
