@@ -22,7 +22,7 @@ def angle_with_horizontal(x1, y1, x2, y2):
             return None
 
 # 
-def extend_line(x1, y1, x2, y2, height):
+def extend_line(x1, y1, x2, y2, height, image):
     if x2 != x1:
         slope = (y2 - y1) / (x2 - x1)
         if slope != 0:
@@ -40,9 +40,26 @@ def extend_line(x1, y1, x2, y2, height):
         x_bottom = x2
         y_top = 0
         y_bottom = height
+
+    cv2.line(image, (x_top, y_top), (x_bottom, y_bottom), (255, 0, 0), 5)
     return (x_top, y_top, x_bottom, y_bottom)
 
-# 找到路口
+# 計算線段所夾角度
+def angle_between_lines(line1, line2):
+    def line_slope(line):
+        x1, y1, x2, y2 = line
+        return (y2 - y1) / (x2 - x1) if x2 != x1 else np.inf
+
+    slope1 = line_slope(line1)
+    slope2 = line_slope(line2)
+    if slope1 != np.inf and slope2 != np.inf:
+        angle = np.degrees(np.arctan(np.abs((slope2 - slope1) / (1 + slope1 * slope2))))
+        if angle > 90:
+            angle = 180 - angle
+        return abs(angle)
+    return None
+
+# 利用線段焦點找到路口
 def find_intersection(line1, line2):
     x1, y1, x2, y2 = line1
     x3, y3, x4, y4 = line2
@@ -91,7 +108,7 @@ def lookup_xtable(distance):
         return 0
 
 # roi線段檢測
-def detect_lane(frame, roi_points):
+def detect_lane(frame, roi_points, min_line_len=10):
     rect = cv2.boundingRect(roi_points)
     x, y, w, h = rect
     cropped = frame[y:y+h, x:x+w].copy()
@@ -104,26 +121,47 @@ def detect_lane(frame, roi_points):
 
     red = warped[:, :, 2]
     # Apply Gaussian blur to remove noise and shadows
-    gaussian = cv2.GaussianBlur(red, (7, 7), 0)
+    gaussian = cv2.GaussianBlur(red, (5, 5), 0)
+    edges = cv2.Canny(gaussian, 50, 150)
 
     # 使用 EDLines 進行線段檢測
-    lines = LineSegmentDetectionED(gaussian, min_line_len=20, line_fit_err_thres=1.4)
+    lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=1.4)
     
+    left_lines = []
+    right_lines = []
+    center_x = w / 2
+
     # 判斷路口直角
     detected_right_angle = False
+
     if lines is not None:
         for line in lines:
             x1, y1, x2, y2 = line[:4]
-            angle = angle_with_horizontal(x1, y1, x2, y2)
-            if angle is not None and (angle > 75):
-                detected_right_angle = True
-                cv2.line(warped, (x1, y1), (x2, y2), (0, 0, 255), 2) #red:right_angle
-            else:
-                cv2.line(warped, (x1, y1), (x2, y2), (0, 255, 0), 2) #blue:only line
-    #else:
-        #print("No lines detected")
+            if x1 < center_x and x2 < center_x:
+                left_lines.append(line)
+            elif x1 > center_x and x2 > center_x:
+                right_lines.append(line)
 
-    return warped, lines, detected_right_angle
+        if left_lines and right_lines:
+            left_line = np.mean(left_lines, axis=0).astype(int)
+            right_line = np.mean(right_lines, axis=0).astype(int)
+
+            left_extended = extend_line(*left_line[:4], h, warped)
+            right_extended = extend_line(*right_line[:4], h, warped)
+
+            intersection = find_intersection(left_extended, right_extended)
+            if intersection:
+                angle = angle_between_lines(left_extended, right_extended)
+                if angle is not None and (angle > 70 and angle <90):
+                    detected_right_angle = True
+                    cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 0, 255), 2)
+                    cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 0, 255), 2)
+                else:
+                    detected_right_angle = False
+                    cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
+                    cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
+
+    return warped, left_lines, right_lines, detected_right_angle
 
 # 計算直線角度
 def calculate_steering_angle(lines):
@@ -211,14 +249,15 @@ class CameraReaderNode(DTROS):
         self.straight_status_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/straight_status", String, queue_size=10)
 
         # 定義左右平行四邊形區域 ROI
-        self.left_roi_points = np.array([[100, 200], [200, 200], [200, 400], [100, 400]], np.int32).reshape((-1, 1, 2))
-        self.right_roi_points = np.array([[350, 200], [450, 200], [450, 400], [350, 400]], np.int32).reshape((-1, 1, 2))
+        self.left_roi_points = np.array([[100, 240], [200, 240], [200, 480], [100, 480]], np.int32).reshape((-1, 1, 2))
+        self.right_roi_points = np.array([[350, 240], [450, 240], [450, 480], [350, 480]], np.int32).reshape((-1, 1, 2))
 
         #publisher offset
         self.offset_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/offset", Float32, queue_size=10)
 
         # 初始狀態是直線
         self.state = "STRAIGHT"
+        self.turn_direction = "NONE" 
 
     def callback(self, msg):
         # convert JPEG bytes to CV image
@@ -226,46 +265,32 @@ class CameraReaderNode(DTROS):
         right_steering_angle = 0
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
 
-        left_processed_image, left_lines, left_detected_right_angle = detect_lane(image, self.left_roi_points)
-        right_processed_image, right_lines, right_detected_right_angle = detect_lane(image, self.right_roi_points)
+        left_processed_image, left_lines, right_lines, left_detected_right_angle = detect_lane(image, self.left_roi_points)
+        right_processed_image, left_lines, right_lines, right_detected_right_angle = detect_lane(image, self.right_roi_points)
 
         left_steering_angle = calculate_steering_angle(left_lines)
         right_steering_angle = calculate_steering_angle(right_lines)
         
+        processed_image = self.process_image(image)
+        height, width = processed_image.shape[:2]
+
+        offset = calculate_offset(processed_image)
+        self.offset_pub.publish(offset)
+        print(f"Current offset: {offset}")
+
         #print(f"Left Steering Angle: {left_steering_angle:.2f} degrees")
         #print(f"Right Steering Angle: {right_steering_angle:.2f} degrees")
-
-        # Extend left and right lines to find intersection
-        height, width = image.shape[:2]
-        straight = False
-        if left_lines is not None and right_lines is not None:
-            if len(left_lines) > 0 and len(right_lines) > 0:
-                left_line = np.mean(left_lines, axis=0).astype(int)
-                right_line = np.mean(right_lines, axis=0).astype(int)
-            
-                left_extended = extend_line(*left_line[:4], height)
-                right_extended = extend_line(*right_line[:4], height)
-            
-                intersection = find_intersection(left_extended, right_extended)
-            
-            if intersection:
-                cv2.circle(image, (int(intersection[0]), int(intersection[1])), 10, (0, 0, 255), -1)
-                center_x = width / 2
-                center_threshold = 20  # 調整閾值
-                if abs(intersection[0] - center_x) < center_threshold:
-                    straight = True
-                print(f"Intersection: {intersection}, Straight: {straight}")
-            else:
-                print("No intersection found.")
 
        # 狀態轉換
         if self.state == "STRAIGHT":
             if right_detected_right_angle:
                 self.state = "PREPARE_TURN"
                 self.turn_direction = "RIGHT"
+                min_line_len = 5
             elif left_detected_right_angle:
                 self.state = "PREPARE_TURN"
                 self.turn_direction = "LEFT"
+                min_line_len = 5
         elif self.state == "PREPARE_TURN":
             if self.turn_direction == "RIGHT" and not right_detected_right_angle:
                 self.state = "TURN"
@@ -275,6 +300,7 @@ class CameraReaderNode(DTROS):
             if self.check_straight(image):
                 self.state = "STRAIGHT"
                 self.turn_direction = "NONE"
+                min_line_len = 10
 
 
         # 發布目前狀態
@@ -297,12 +323,6 @@ class CameraReaderNode(DTROS):
 
         self.angle_pub.publish(Float32((left_steering_angle + right_steering_angle) / 2))
         
-        processed_image = self.process_image(image)
-
-        offset = calculate_offset(processed_image)
-        self.offset_pub.publish(offset)
-        print(f"Current offset: {offset}")
-
         # Display the processed image
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
         cv2.namedWindow(self._window_left, cv2.WINDOW_AUTOSIZE)
@@ -311,10 +331,6 @@ class CameraReaderNode(DTROS):
         cv2.imshow(self._window_left, left_processed_image)
         cv2.imshow(self._window_right, right_processed_image)
         cv2.waitKey(1)
-
-        # 釋放記憶體
-        cv2.destroyAllWindows()
-        gc.collect()
     
     def process_image(self, src):
         # Get dimensions of the image
@@ -325,24 +341,38 @@ class CameraReaderNode(DTROS):
         red = cropped_src[:, :, 2]
         # Apply Gaussian blur to remove noise and shadows
         gaussian = cv2.GaussianBlur(red, (7, 7), 0)
+
+        edges = cv2.Canny(gaussian, 50, 150)
         # Assume LineSegmentDetectionED is a function defined elsewhere
-        lines = LineSegmentDetectionED(gaussian, min_line_len=20, line_fit_err_thres=1.4)
+        lines = LineSegmentDetectionED(edges, min_line_len=20, line_fit_err_thres=1.4)
+
+        left_lines = []
+        right_lines = []
+        center_x = width / 2
 
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = line[:4]
-                angle = angle_with_horizontal(x1, y1, x2, y2)
-                # 僅處理角度大於0的線段
-                if angle is not None:
-                    # 在圖像上繪製線段
-                    cv2.line(gaussian, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    # 添加角度文字
-                    text_position = (min(x1, x2), min(y1, y2) + 20)  # 顯示角度的位置稍微在線段上方
-                    distance_value = lookup_xtable(x_distance(x1, width))
-                    cv2.putText(gaussian, f"{distance_value:.2f}", text_position, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                    # ros publisher
-                    self.angle_pub.publish(Float32(angle))
-        
+                if x1 < center_x and x2 < center_x:
+                    left_lines.append(line)
+                elif x1 > center_x and x2 > center_x:
+                    right_lines.append(line)
+
+            if left_lines:
+                left_line = np.mean(left_lines, axis=0).astype(int)
+                left_extended = extend_line(*left_line[:4], height, gaussian)
+                cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
+
+            if right_lines:
+                right_line = np.mean(right_lines, axis=0).astype(int)
+                right_extended = extend_line(*right_line[:4], height, gaussian)
+                cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
+
+            if left_lines and right_lines:
+                intersection = find_intersection(left_extended, right_extended)
+                if intersection:
+                    cv2.circle(gaussian, (int(intersection[0]), int(intersection[1])), 10, (0, 0, 255), -1)
+
         return gaussian
     
     def check_straight(self, image):
@@ -357,8 +387,8 @@ class CameraReaderNode(DTROS):
             left_line = np.mean(left_lines, axis=0).astype(int)
             right_line = np.mean(right_lines, axis=0).astype(int)
             
-            left_extended = extend_line(*left_line[:4], height)
-            right_extended = extend_line(*right_line[:4], height)
+            left_extended = extend_line(*left_line[:4], height, image)
+            right_extended = extend_line(*right_line[:4], height, image)
             
             intersection = find_intersection(left_extended, right_extended)
             
