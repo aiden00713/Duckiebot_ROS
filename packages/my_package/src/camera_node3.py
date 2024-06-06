@@ -9,6 +9,10 @@ from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge
 from std_msgs.msg import String, Float32
 
+# 新增左右邊線延伸至畫面中央來判斷是否為正
+# 找到轉彎直角後就預備準備轉彎
+# 直線狀態 -> 轉彎狀態 -> 直線狀態的判斷情況 
+# 右轉時偵測左側roi轉彎輔助線段來輔助轉彎
 
 # Function to calculate the angle with the horizontal axis
 def angle_with_horizontal(x1, y1, x2, y2):
@@ -22,6 +26,30 @@ def angle_with_horizontal(x1, y1, x2, y2):
         else:
             return None
 
+def extend_line(x1, y1, x2, y2, height):
+    if x2 != x1:
+        slope = (y2 - y1) / (x2 - x1)
+        y_top = 0
+        x_top = int(x1 + (y_top - y1) / slope)
+        y_bottom = height
+        x_bottom = int(x1 + (y_bottom - y1) / slope)
+    else:  # 垂直線
+        x_top = x1
+        x_bottom = x2
+        y_top = 0
+        y_bottom = height
+    return (x_top, y_top, x_bottom, y_bottom)
+
+def find_intersection(line1, line2):
+    x1, y1, x2, y2 = line1
+    x3, y3, x4, y4 = line2
+    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if denom != 0:
+        px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom
+        py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
+        return (px, py)
+    else:
+        return None
 
 def draw_grid(image, grid_size=(5, 4)):
     height, width = image.shape[:2]
@@ -36,21 +64,16 @@ def draw_grid(image, grid_size=(5, 4)):
     
     return image
 
-
 def distance(x1, y1, width, height):
     center_x = width / 2
     center_y = height / 2
     distance = np.sqrt((x1 - center_x) ** 2 + (y1 - center_y) ** 2)
     return distance
 
-
-
 def x_distance(x1, width):
     center_x = width / 2
-    x_distance = abs(x1 - center_x) 
+    x_distance = abs(x1 - center_x)
     return x_distance
-
-
 
 def lookup_xtable(distance):
     if distance > 0 and distance <= 160:
@@ -89,11 +112,10 @@ def detect_lane(frame, roi_points):
                 cv2.line(warped, (x1, y1), (x2, y2), (0, 0, 255), 2) #red:right_angle
             else:
                 cv2.line(warped, (x1, y1), (x2, y2), (0, 255, 0), 2) #blue:only line
-    else:
-        rospy.loginfo("No lines detected")
+    #else:
+        #print("No lines detected")
 
     return warped, lines, detected_right_angle
-
 
 def calculate_steering_angle(lines):
     if lines is None:
@@ -123,11 +145,10 @@ class CameraReaderNode(DTROS):
         self._bridge = CvBridge()
 
         # create window
-        self._window = "camera-reader"
+        self._window = "MAIN_camera-reader"
 
         self._window_left = "Left ROI"
         self._window_right = "Right ROI"
-
 
         # construct subscriber
         self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
@@ -139,73 +160,103 @@ class CameraReaderNode(DTROS):
         self.right_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/right_dist", Float32, queue_size=10)
         self.left_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/left_dist", Float32, queue_size=10)
 
-        # 定義左右平行四邊形區域 ROI
-        #self.left_roi_points = np.array([[100, 0], [200, 0], [100, 480], [200, 480]], np.int32).reshape((-1, 1, 2))
-        #self.right_roi_points = np.array([[400, 0], [600, 0], [400, 480], [600, 480]], np.int32).reshape((-1, 1, 2))
+        #publisher straight status
+        self.straight_status_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/straight_status", String, queue_size=10)
 
+        # 定義左右平行四邊形區域 ROI
         self.left_roi_points = np.array([[100, 200], [200, 200], [200, 400], [100, 400]], np.int32).reshape((-1, 1, 2))
         self.right_roi_points = np.array([[350, 200], [450, 200], [450, 400], [350, 400]], np.int32).reshape((-1, 1, 2))
+
+        # 初始狀態是直線
+        self.state = "STRAIGHT"
 
     def callback(self, msg):
         # convert JPEG bytes to CV image
         left_steering_angle = 0
         right_steering_angle = 0
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
-        #height, width = image.shape[:2]
-        #rospy.loginfo(f"Image size: width={width}, height={height}")
 
         left_processed_image, left_lines, left_detected_right_angle = detect_lane(image, self.left_roi_points)
         right_processed_image, right_lines, right_detected_right_angle = detect_lane(image, self.right_roi_points)
 
-        if left_steering_angle != 0 or right_steering_angle != 0:
-                self.angle_callback(Float32((left_steering_angle + right_steering_angle) / 2))
-
         left_steering_angle = calculate_steering_angle(left_lines)
         right_steering_angle = calculate_steering_angle(right_lines)
-        print(f"Left Steering Angle: {left_steering_angle:.2f} degrees")
-        print(f"Right Steering Angle: {right_steering_angle:.2f} degrees")
+        
+        #print(f"Left Steering Angle: {left_steering_angle:.2f} degrees")
+        #print(f"Right Steering Angle: {right_steering_angle:.2f} degrees")
+
+        # Extend left and right lines to find intersection
+        height, width = image.shape[:2]
+        straight = False
+        if left_lines is not None and right_lines is not None:
+            left_line = np.mean(left_lines, axis=0).astype(int)
+            right_line = np.mean(right_lines, axis=0).astype(int)
+            
+            left_extended = extend_line(*left_line[:4], height)
+            right_extended = extend_line(*right_line[:4], height)
+            
+            intersection = find_intersection(left_extended, right_extended)
+            
+            if intersection:
+                cv2.circle(image, (int(intersection[0]), int(intersection[1])), 10, (0, 0, 255), -1)
+                center_x = width / 2
+                center_threshold = 20  # 調整閾值
+                if abs(intersection[0] - center_x) < center_threshold:
+                    straight = True
+                print(f"Intersection: {intersection}, Straight: {straight}")
+            else:
+                print("No intersection found.")
+
+       # 狀態轉換
+        if self.state == "STRAIGHT":
+            if right_detected_right_angle:
+                self.state = "PREPARE_TURN"
+                self.turn_direction = "RIGHT"
+            elif left_detected_right_angle:
+                self.state = "PREPARE_TURN"
+                self.turn_direction = "LEFT"
+        elif self.state == "PREPARE_TURN":
+            if self.turn_direction == "RIGHT" and not right_detected_right_angle:
+                self.state = "TURN"
+            elif self.turn_direction == "LEFT" and not left_detected_right_angle:
+                self.state = "TURN"
+        elif self.state == "TURN":
+            if self.check_straight(image):
+                self.state = "STRAIGHT"
+                self.turn_direction = "NONE"
+
+
+        # 發布目前狀態
+        status_message = f"{self.state},{self.turn_direction}"
+        self.straight_status_pub.publish(status_message)
+        print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
+
 
         if right_detected_right_angle:
-            rospy.loginfo("Detected RIGHT_ROI right angle.")
-            height, width = image.shape[:2]
+            print("Detected RIGHT_ROI right angle.")
             dist = distance(right_lines[0][0], right_lines[0][1], width, height)
-            rospy.loginfo(f"RIGHT_ROI Intersection Distance: {dist:.2f}")
+            print(f"RIGHT_ROI Intersection Distance: {dist:.2f}")
             self.right_inter_dist_pub.publish(Float32(dist))
 
         if left_detected_right_angle:
-            rospy.loginfo("Detected LEFT_ROI right angle.")
-            height, width = image.shape[:2]
+            print("Detected LEFT_ROI right angle.")
             dist = distance(left_lines[0][0], left_lines[0][1], width, height)
-            rospy.loginfo(f"LEFT_ROI Intersection Distance: {dist:.2f}")
+            print(f"LEFT_ROI Intersection Distance: {dist:.2f}")
             self.left_inter_dist_pub.publish(Float32(dist))
-
 
         self.angle_pub.publish(Float32((left_steering_angle + right_steering_angle) / 2))
         
         processed_image = self.process_image(image)
 
-        #left_processed_image_grid = draw_grid(left_processed_image)
-        #right_processed_image_grid = draw_grid(right_processed_image)
-
-        '''
-        # Process the image
-        
-        processed_image_grid = draw_grid(processed_image)
-        '''
         # Display the processed image
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
         cv2.namedWindow(self._window_left, cv2.WINDOW_AUTOSIZE)
         cv2.namedWindow(self._window_right, cv2.WINDOW_AUTOSIZE)
-        #cv2.imshow(self._window, processed_image)
-        #cv2.imshow(self._window, processed_image_grid)
-        #combined_image = np.hstack((left_processed_image_grid, right_processed_image_grid))
         cv2.imshow(self._window, processed_image)
         cv2.imshow(self._window_left, left_processed_image)
         cv2.imshow(self._window_right, right_processed_image)
-        #cv2.imshow(self._window, combined_image)
         cv2.waitKey(1)
     
-
     def process_image(self, src):
         # Get dimensions of the image
         height, width = src.shape[:2]
