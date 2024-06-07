@@ -108,7 +108,7 @@ def lookup_xtable(distance):
         return 0
 
 # roi線段檢測
-def detect_lane(frame, roi_points, min_line_len=10):
+def detect_lane(frame, roi_points, min_line_len_vertical, min_line_len_horizontal):
     rect = cv2.boundingRect(roi_points)
     x, y, w, h = rect
     cropped = frame[y:y+h, x:x+w].copy()
@@ -125,8 +125,12 @@ def detect_lane(frame, roi_points, min_line_len=10):
     edges = cv2.Canny(gaussian, 50, 150)
 
     # 使用 EDLines 進行線段檢測
-    lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=1.4)
-    
+    #lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=1.4)
+    # 使用 EDLines 進行線段檢測（直向）
+    vertical_lines = LineSegmentDetectionED(gaussian, min_line_len=min_line_len_vertical, line_fit_err_thres=1.4)
+    # 使用 EDLines 進行線段檢測（横向）
+    horizontal_lines = LineSegmentDetectionED(gaussian, min_line_len=min_line_len_horizontal, line_fit_err_thres=1.4)
+
     left_lines = []
     right_lines = []
     center_x = w / 2
@@ -134,34 +138,25 @@ def detect_lane(frame, roi_points, min_line_len=10):
     # 判斷路口直角
     detected_right_angle = False
 
-    if lines is not None:
-        for line in lines:
-            x1, y1, x2, y2 = line[:4]
-            if x1 < center_x and x2 < center_x:
-                left_lines.append(line)
-            elif x1 > center_x and x2 > center_x:
-                right_lines.append(line)
+    if vertical_lines is not None and horizontal_lines is not None:
+        for v_line in vertical_lines:
+            for h_line in horizontal_lines:
+                left_extended = extend_line(*v_line[:4], h, warped)
+                right_extended = extend_line(*h_line[:4], h, warped)
 
-        if left_lines and right_lines:
-            left_line = np.mean(left_lines, axis=0).astype(int)
-            right_line = np.mean(right_lines, axis=0).astype(int)
+                intersection = find_intersection(left_extended, right_extended)
+                if intersection:
+                    angle = angle_between_lines(left_extended, right_extended)
+                    if angle is not None and (angle > 70 and angle <90):
+                        detected_right_angle = True
+                        cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 0, 255), 2)
+                        cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 0, 255), 2)
+                    else:
+                        detected_right_angle = False
+                        cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 255, 0), 2)
+                        cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 255, 0), 2)
 
-            left_extended = extend_line(*left_line[:4], h, warped)
-            right_extended = extend_line(*right_line[:4], h, warped)
-
-            intersection = find_intersection(left_extended, right_extended)
-            if intersection:
-                angle = angle_between_lines(left_extended, right_extended)
-                if angle is not None and (angle > 70 and angle <90):
-                    detected_right_angle = True
-                    cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 0, 255), 2)
-                    cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 0, 255), 2)
-                else:
-                    detected_right_angle = False
-                    cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
-                    cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
-
-    return warped, left_lines, right_lines, detected_right_angle
+    return warped, vertical_lines, horizontal_lines, detected_right_angle
 
 # 計算直線角度
 def calculate_steering_angle(lines):
@@ -265,11 +260,40 @@ class CameraReaderNode(DTROS):
         right_steering_angle = 0
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
 
-        left_processed_image, left_lines, right_lines, left_detected_right_angle = detect_lane(image, self.left_roi_points)
-        right_processed_image, left_lines, right_lines, right_detected_right_angle = detect_lane(image, self.right_roi_points)
+        dynamic_min_line_len_vertical = 10
+        dynamic_min_line_len_horizontal = 20
+        
+        right_detected_right_angle = False
+        left_detected_right_angle = False
 
-        left_steering_angle = calculate_steering_angle(left_lines)
-        right_steering_angle = calculate_steering_angle(right_lines)
+        # 狀態轉換
+        if self.state == "STRAIGHT":
+            if right_detected_right_angle:
+                self.state = "PREPARE_TURN"
+                self.turn_direction = "RIGHT"
+                dynamic_min_line_len_vertical = 5
+                dynamic_min_line_len_horizontal = 10
+            elif left_detected_right_angle:
+                self.state = "PREPARE_TURN"
+                self.turn_direction = "LEFT"
+                dynamic_min_line_len_vertical = 5
+                dynamic_min_line_len_horizontal = 10
+        elif self.state == "PREPARE_TURN":
+            if self.turn_direction == "RIGHT" and not right_detected_right_angle:
+                self.state = "TURN"
+            elif self.turn_direction == "LEFT" and not left_detected_right_angle:
+                self.state = "TURN"
+        elif self.state == "TURN":
+            if self.check_straight(image):
+                self.state = "STRAIGHT"
+                self.turn_direction = "NONE"
+        
+
+        left_processed_image, left_vertical_lines, left_horizontal_lines, left_detected_right_angle = detect_lane(image, self.left_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
+        right_processed_image, right_vertical_lines, right_horizontal_lines, right_detected_right_angle = detect_lane(image, self.right_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
+
+        left_steering_angle = calculate_steering_angle(left_vertical_lines)
+        right_steering_angle = calculate_steering_angle(right_vertical_lines)
         
         processed_image = self.process_image(image)
         height, width = processed_image.shape[:2]
@@ -281,27 +305,6 @@ class CameraReaderNode(DTROS):
         #print(f"Left Steering Angle: {left_steering_angle:.2f} degrees")
         #print(f"Right Steering Angle: {right_steering_angle:.2f} degrees")
 
-       # 狀態轉換
-        if self.state == "STRAIGHT":
-            if right_detected_right_angle:
-                self.state = "PREPARE_TURN"
-                self.turn_direction = "RIGHT"
-                min_line_len = 5
-            elif left_detected_right_angle:
-                self.state = "PREPARE_TURN"
-                self.turn_direction = "LEFT"
-                min_line_len = 5
-        elif self.state == "PREPARE_TURN":
-            if self.turn_direction == "RIGHT" and not right_detected_right_angle:
-                self.state = "TURN"
-            elif self.turn_direction == "LEFT" and not left_detected_right_angle:
-                self.state = "TURN"
-        elif self.state == "TURN":
-            if self.check_straight(image):
-                self.state = "STRAIGHT"
-                self.turn_direction = "NONE"
-                min_line_len = 10
-
 
         # 發布目前狀態
         status_message = f"{self.state},{self.turn_direction}"
@@ -311,13 +314,13 @@ class CameraReaderNode(DTROS):
 
         if right_detected_right_angle:
             print("Detected RIGHT_ROI right angle.")
-            dist = distance(right_lines[0][0], right_lines[0][1], width, height)
+            dist = distance(right_vertical_lines[0][0], right_vertical_lines[0][1], width, height)
             print(f"RIGHT_ROI Intersection Distance: {dist:.2f}")
             self.right_inter_dist_pub.publish(Float32(dist))
 
         if left_detected_right_angle:
             print("Detected LEFT_ROI right angle.")
-            dist = distance(left_lines[0][0], left_lines[0][1], width, height)
+            dist = distance(left_vertical_lines[0][0], left_vertical_lines[0][1], width, height)
             print(f"LEFT_ROI Intersection Distance: {dist:.2f}")
             self.left_inter_dist_pub.publish(Float32(dist))
 
