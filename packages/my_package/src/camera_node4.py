@@ -208,6 +208,93 @@ def calculate_offset(image):
         return offset
 
 
+def is_dashed_line(points, length_threshold=100, gap_threshold=30):
+    """
+    判断是否为虚线。
+    如果线段之间的间隔大于gap_threshold且线段长度小于length_threshold，则认为是虚线。
+    """
+    # 计算每个线段的长度
+    lengths = np.sqrt(np.sum((points[1::2] - points[::2])**2, axis=1))
+    # 计算相邻线段的间隔
+    distances = np.sqrt(np.sum(np.diff(points[::2], axis=0)**2, axis=1))
+    
+    print(f"Line lengths: {lengths}")
+    print(f"Line gaps: {distances}")
+    
+    # 判断是否为虚线
+    dashed_lines = []
+    for i in range(len(lengths)):
+        if lengths[i] < length_threshold and (i == 0 or distances[i-1] > gap_threshold):
+            dashed_lines.append((points[2*i], points[2*i+1]))
+    
+    print(f"Dashed line segments: {dashed_lines}")
+    return len(dashed_lines) >= 3, dashed_lines
+
+
+def detect_curved_lane(image):
+    # 检查图像是否加载成功
+    if image is None:
+        print("Error: Image not found or unable to load.")
+        return None
+
+    # 灰度化
+    height, width = image.shape[:2]
+    cropped_src = image[height // 2:height, :]
+    red = cropped_src[:, :, 2]
+
+    # 高斯模糊
+    blur = cv2.GaussianBlur(red, (7, 7), 0)
+    # Canny边缘检测
+    edges = cv2.Canny(blur, 50, 150)
+
+    # EDLines
+    lines = LineSegmentDetectionED(edges, min_line_len=10, line_fit_err_thres=1.4)
+
+    all_points = []
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = map(int, line[:4])
+            y1 += height // 2  # 调整 y 坐标，因为我们只使用了图像的下半部分
+            y2 += height // 2  # 调整 y 坐标，因为我们只使用了图像的下半部分
+            all_points.append((x1, y1))
+            all_points.append((x2, y2))
+            cv2.line(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        
+        #print(f"Detected points: {all_points}")
+
+        all_points = np.array(all_points, dtype=np.int32)
+
+        # 检查是否为虚线
+        is_dashed, dashed_lines = is_dashed_line(all_points)
+        if is_dashed:  # 如果检测到虚线
+            dashed_points = np.array([pt for segment in dashed_lines for pt in segment], dtype=np.int32)
+            x = dashed_points[:, 0]
+            y = dashed_points[:, 1]
+
+            # 使用多项式拟合
+            z = np.polyfit(x, y, 2)
+            p = np.poly1d(z)
+
+            # 控制弧线长度
+            x_min = np.min(x)
+            x_max = np.min(x) + (np.max(x) - np.min(x)) / 2  # 调整弧线长度为原来的一半
+
+            # 生成拟合曲线的点
+            x_new = np.linspace(x_min, x_max, 100)
+            y_new = p(x_new)
+
+            # 绘制弧线
+            for i in range(len(x_new) - 1):
+                cv2.line(image, (int(x_new[i]), int(y_new[i])), (int(x_new[i + 1]), int(y_new[i + 1])), (0, 0, 255), 3)
+            cv2.putText(image, 'Curved Lane', (int(x_new[0]), int(y_new[0]) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        else:
+            print("No dashed line detected or not enough points for fitting.")
+    else:
+        print("No lines detected.")
+
+    return image
+
+
 
 
 class CameraReaderNode(DTROS):
@@ -266,6 +353,9 @@ class CameraReaderNode(DTROS):
         right_detected_right_angle = False
         left_detected_right_angle = False
 
+        # Detect curved lane
+        curved_lane_image = detect_curved_lane(image)
+
         # 狀態轉換
         if self.state == "STRAIGHT":
             if right_detected_right_angle:
@@ -283,6 +373,8 @@ class CameraReaderNode(DTROS):
                 self.state = "TURN"
             elif self.turn_direction == "LEFT" and not left_detected_right_angle:
                 self.state = "TURN"
+            if self.turn_direction == "RIGHT" or self.turn_direction == "LEFT":
+                self.handle_curved_lane(curved_lane_image)
         elif self.state == "TURN":
             if self.check_straight(image):
                 self.state = "STRAIGHT"
@@ -396,8 +488,29 @@ class CameraReaderNode(DTROS):
             intersection = find_intersection(left_extended, right_extended)
             
             if intersection:
+                cv2.circle(image, (int(intersection[0]), int(intersection[1])), 10, (0, 0, 255), -1)  # Highlight intersection
                 return abs(intersection[0] - center_x) < center_threshold
         return False
+    
+    def handle_curved_lane(self, image):
+        curved_image = detect_curved_lane(image)
+        if curved_image is not None:
+        # Calculate the steering angle for the curved path
+            height, width = image.shape[:2]
+            x_coords = []
+            y_coords = []
+            for i in range(width):
+                for j in range(height // 2, height):
+                    if (curved_image[j, i] == [0, 0, 255]).all():  # Check for the red color of the curve
+                        x_coords.append(i)
+                        y_coords.append(j)
+
+            if len(x_coords) > 0 and len(y_coords) > 0:
+                z = np.polyfit(x_coords, y_coords, 2)
+                p = np.poly1d(z)
+                curvature = np.polyder(p, 2)(np.mean(x_coords))  # Second derivative gives curvature
+                steering_angle = np.arctan(curvature)
+                self.angle_pub.publish(Float32(steering_angle * 180 / np.pi))
 
 if __name__ == '__main__':
     try:
@@ -407,3 +520,12 @@ if __name__ == '__main__':
         rospy.spin()
     except rospy.ROSInterruptException:
         pass
+
+'''
+20240628 最新版
+1.新增找到轉彎處的直角有一個點輔助轉彎
+2.轉彎輔助線的圓弧形判斷
+
+
+
+'''
