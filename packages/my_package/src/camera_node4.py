@@ -46,18 +46,23 @@ def extend_line(x1, y1, x2, y2, height, image):
 
 # 計算線段所夾角度
 def angle_between_lines(line1, line2):
-    def line_slope(line):
-        x1, y1, x2, y2 = line
-        return (y2 - y1) / (x2 - x1) if x2 != x1 else np.inf
+    def unit_vector(vector):
+        return vector / np.linalg.norm(vector)
 
-    slope1 = line_slope(line1)
-    slope2 = line_slope(line2)
-    if slope1 != np.inf and slope2 != np.inf:
-        angle = np.degrees(np.arctan(np.abs((slope2 - slope1) / (1 + slope1 * slope2))))
-        if angle > 90:
-            angle = 180 - angle
-        return abs(angle)
-    return None
+    x1, y1, x2, y2 = line1
+    x3, y3, x4, y4 = line2
+
+    vector1 = np.array([x2 - x1, y2 - y1])
+    vector2 = np.array([x4 - x3, y4 - y3])
+
+    unit_vector1 = unit_vector(vector1)
+    unit_vector2 = unit_vector(vector2)
+
+    dot_product = np.dot(unit_vector1, unit_vector2)
+    angle = np.arccos(dot_product)
+    angle = np.degrees(angle)
+    
+    return angle
 
 # 利用線段焦點找到路口
 def find_intersection(line1, line2):
@@ -106,57 +111,6 @@ def lookup_xtable(distance):
         return 50
     else:
         return 0
-
-# roi線段檢測
-def detect_lane(frame, roi_points, min_line_len_vertical, min_line_len_horizontal):
-    rect = cv2.boundingRect(roi_points)
-    x, y, w, h = rect
-    cropped = frame[y:y+h, x:x+w].copy()
-    pts2 = roi_points - roi_points.min(axis=0)
-    dst_pts = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
-    src_pts = pts2.astype(np.float32)
-    M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-    # 影像透視 不規則圖形轉平面
-    warped = cv2.warpPerspective(cropped, M, (w, h))
-
-    red = warped[:, :, 2]
-    # Apply Gaussian blur to remove noise and shadows
-    gaussian = cv2.GaussianBlur(red, (5, 5), 0)
-    edges = cv2.Canny(gaussian, 50, 150)
-
-    # 使用 EDLines 進行線段檢測
-    #lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=1.4)
-    # 使用 EDLines 進行線段檢測（直向）
-    vertical_lines = LineSegmentDetectionED(gaussian, min_line_len=min_line_len_vertical, line_fit_err_thres=1.4)
-    # 使用 EDLines 進行線段檢測（横向）
-    horizontal_lines = LineSegmentDetectionED(gaussian, min_line_len=min_line_len_horizontal, line_fit_err_thres=1.4)
-
-    left_lines = []
-    right_lines = []
-    center_x = w / 2
-
-    # 判斷路口直角
-    detected_right_angle = False
-
-    if vertical_lines is not None and horizontal_lines is not None:
-        for v_line in vertical_lines:
-            for h_line in horizontal_lines:
-                left_extended = extend_line(*v_line[:4], h, warped)
-                right_extended = extend_line(*h_line[:4], h, warped)
-
-                intersection = find_intersection(left_extended, right_extended)
-                if intersection:
-                    angle = angle_between_lines(left_extended, right_extended)
-                    if angle is not None and (angle > 70 and angle <90):
-                        detected_right_angle = True
-                        cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 0, 255), 2)
-                        cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 0, 255), 2)
-                    else:
-                        detected_right_angle = False
-                        cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 255, 0), 2)
-                        cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 255, 0), 2)
-
-    return warped, vertical_lines, horizontal_lines, detected_right_angle
 
 # 計算直線角度
 def calculate_steering_angle(lines):
@@ -218,8 +172,8 @@ def is_dashed_line(points, length_threshold=100, gap_threshold=30):
     # 计算相邻线段的间隔
     distances = np.sqrt(np.sum(np.diff(points[::2], axis=0)**2, axis=1))
     
-    print(f"Line lengths: {lengths}")
-    print(f"Line gaps: {distances}")
+    #print(f"Line lengths: {lengths}")
+    #print(f"Line gaps: {distances}")
     
     # 判断是否为虚线
     dashed_lines = []
@@ -227,7 +181,7 @@ def is_dashed_line(points, length_threshold=100, gap_threshold=30):
         if lengths[i] < length_threshold and (i == 0 or distances[i-1] > gap_threshold):
             dashed_lines.append((points[2*i], points[2*i+1]))
     
-    print(f"Dashed line segments: {dashed_lines}")
+    #print(f"Dashed line segments: {dashed_lines}")
     return len(dashed_lines) >= 3, dashed_lines
 
 
@@ -341,6 +295,58 @@ class CameraReaderNode(DTROS):
         self.state = "STRAIGHT"
         self.turn_direction = "NONE" 
 
+
+    # roi線段檢測
+    def detect_lane(self, frame, roi_points, min_line_len_vertical, min_line_len_horizontal):
+        rect = cv2.boundingRect(roi_points)
+        x, y, w, h = rect
+        cropped = frame[y:y+h, x:x+w].copy()
+        pts2 = roi_points - roi_points.min(axis=0)
+        dst_pts = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
+        src_pts = pts2.astype(np.float32)
+        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+        # 影像透視 不規則圖形轉平面
+        warped = cv2.warpPerspective(cropped, M, (w, h))
+
+        red = warped[:, :, 2]
+        # Apply Gaussian blur to remove noise and shadows
+        gaussian = cv2.GaussianBlur(red, (5, 5), 0)
+        edges = cv2.Canny(gaussian, 50, 150)
+
+        # 使用 EDLines 進行線段檢測
+        #lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=1.4)
+        # 使用 EDLines 進行線段檢測（直向）
+        vertical_lines = LineSegmentDetectionED(gaussian, min_line_len=min_line_len_vertical, line_fit_err_thres=1.4)
+        # 使用 EDLines 進行線段檢測（横向）
+        horizontal_lines = LineSegmentDetectionED(gaussian, min_line_len=min_line_len_horizontal, line_fit_err_thres=1.4)
+
+        left_lines = []
+        right_lines = []
+        center_x = w / 2
+
+        # 判斷路口直角
+        detected_right_angle = False
+
+        if vertical_lines is not None and horizontal_lines is not None:
+            for v_line in vertical_lines:
+                for h_line in horizontal_lines:
+                    left_extended = extend_line(*v_line[:4], h, warped)
+                    right_extended = extend_line(*h_line[:4], h, warped)
+
+                    intersection = find_intersection(left_extended, right_extended)
+                    if intersection:
+                        angle = angle_between_lines(left_extended, right_extended)
+                        if angle is not None and (angle > 45 and angle <70):
+                            detected_right_angle = True
+                            cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 0, 255), 2)
+                            cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 0, 255), 2)
+                        else:
+                            cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 255, 0), 2)
+                            cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 255, 0), 2)
+                
+        return warped, vertical_lines, horizontal_lines, detected_right_angle
+
+
     def callback(self, msg):
         # convert JPEG bytes to CV image
         left_steering_angle = 0
@@ -354,7 +360,7 @@ class CameraReaderNode(DTROS):
         left_detected_right_angle = False
 
         # Detect curved lane
-        curved_lane_image = detect_curved_lane(image)
+        curved_lane_image = detect_curved_lane(image.copy())
 
         # 狀態轉換
         if self.state == "STRAIGHT":
@@ -381,13 +387,13 @@ class CameraReaderNode(DTROS):
                 self.turn_direction = "NONE"
         
 
-        left_processed_image, left_vertical_lines, left_horizontal_lines, left_detected_right_angle = detect_lane(image, self.left_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
-        right_processed_image, right_vertical_lines, right_horizontal_lines, right_detected_right_angle = detect_lane(image, self.right_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
+        left_processed_image, left_vertical_lines, left_horizontal_lines, left_detected_right_angle = self.detect_lane(image.copy(), self.left_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
+        right_processed_image, right_vertical_lines, right_horizontal_lines, right_detected_right_angle = self.detect_lane(image.copy(), self.right_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
 
         left_steering_angle = calculate_steering_angle(left_vertical_lines)
         right_steering_angle = calculate_steering_angle(right_vertical_lines)
         
-        processed_image = self.process_image(image)
+        processed_image = self.process_image(image.copy())
         height, width = processed_image.shape[:2]
 
         offset = calculate_offset(processed_image)
@@ -426,7 +432,7 @@ class CameraReaderNode(DTROS):
         cv2.imshow(self._window_left, left_processed_image)
         cv2.imshow(self._window_right, right_processed_image)
         cv2.waitKey(1)
-    
+
     def process_image(self, src):
         # Get dimensions of the image
         height, width = src.shape[:2]
@@ -436,10 +442,9 @@ class CameraReaderNode(DTROS):
         red = cropped_src[:, :, 2]
         # Apply Gaussian blur to remove noise and shadows
         gaussian = cv2.GaussianBlur(red, (7, 7), 0)
-
-        edges = cv2.Canny(gaussian, 50, 150)
+        #edges = cv2.Canny(gaussian, 50, 150)
         # Assume LineSegmentDetectionED is a function defined elsewhere
-        lines = LineSegmentDetectionED(edges, min_line_len=20, line_fit_err_thres=1.4)
+        lines = LineSegmentDetectionED(gaussian, min_line_len=20, line_fit_err_thres=1.4)
 
         left_lines = []
         right_lines = []
@@ -456,18 +461,19 @@ class CameraReaderNode(DTROS):
             if left_lines:
                 left_line = np.mean(left_lines, axis=0).astype(int)
                 left_extended = extend_line(*left_line[:4], height, gaussian)
-                cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
+                #cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
 
+            '''
             if right_lines:
                 right_line = np.mean(right_lines, axis=0).astype(int)
                 right_extended = extend_line(*right_line[:4], height, gaussian)
-                cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
+                #cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
 
             if left_lines and right_lines:
                 intersection = find_intersection(left_extended, right_extended)
                 if intersection:
                     cv2.circle(gaussian, (int(intersection[0]), int(intersection[1])), 10, (0, 0, 255), -1)
-
+            '''
         return gaussian
     
     def check_straight(self, image):
@@ -475,8 +481,8 @@ class CameraReaderNode(DTROS):
         center_x = width / 2
         center_threshold = 20  # 閥值
 
-        left_processed_image, left_lines, _ = detect_lane(image, self.left_roi_points)
-        right_processed_image, right_lines, _ = detect_lane(image, self.right_roi_points)
+        left_processed_image, left_lines, _ = detect_lane(image.copy(), self.left_roi_points)
+        right_processed_image, right_lines, _ = detect_lane(image.copy(), self.right_roi_points)
 
         if left_lines is not None and right_lines is not None:
             left_line = np.mean(left_lines, axis=0).astype(int)
@@ -493,7 +499,7 @@ class CameraReaderNode(DTROS):
         return False
     
     def handle_curved_lane(self, image):
-        curved_image = detect_curved_lane(image)
+        curved_image = detect_curved_lane(image.copy())
         if curved_image is not None:
         # Calculate the steering angle for the curved path
             height, width = image.shape[:2]
@@ -520,12 +526,3 @@ if __name__ == '__main__':
         rospy.spin()
     except rospy.ROSInterruptException:
         pass
-
-'''
-20240628 最新版
-1.新增找到轉彎處的直角有一個點輔助轉彎
-2.轉彎輔助線的圓弧形判斷
-
-
-
-'''
