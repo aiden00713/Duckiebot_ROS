@@ -49,13 +49,16 @@ class WheelControlNode(DTROS):
         self._tof = f"/{self._vehicle_name}/front_center_tof_driver_node/range"
         self._straight_status_topic = f"/{self._vehicle_name}/camera_node/straight_status"
         self._angle_topic = f"/{self._vehicle_name}/camera_node/angle_pub"
+        self._offset_topic = f"/{self._vehicle_name}/camera_node/offset"
         self._right_roi_distance_topic = f"/{self._vehicle_name}/camera_node/right_dist"
+        self._left_roi_distance_topic = f"/{self._vehicle_name}/camera_node/left_dist"
 
         # 構造發布者和訂閱者
         self._publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
-        self.distance_subscriber = rospy.Subscriber(self._tof, Range, self.dis)
+        self.distance_subscriber = rospy.Subscriber(self._tof, Range, self.dis_callback)
         self.straight_status_subscriber = rospy.Subscriber(self._straight_status_topic, String, self.straight_status_callback)
         self.angle_subscriber = rospy.Subscriber(self._angle_topic, Float32, self.angle_callback)
+        self.offset_subscriber = rospy.Subscriber(self._offset_topic, Float32, self.offset_callback)
         self.right_roi_distance_subscriber = rospy.Subscriber(self._right_roi_distance_topic, Float32, self.right_roi_distance_callback)
 
         # 狀態變量
@@ -63,21 +66,35 @@ class WheelControlNode(DTROS):
         self.turn_direction = "NONE"
         self._dis = 0
         self._right_roi_distance = 9999  # 初始值設置為較大值
+        self._offset = 0
 
         # 初始化PID控制器
-        self.pid = PIDController(kp=1.0, ki=0.1, kd=0.05)
+        self.pid_angle = PIDController(kp=0.5, ki=0.01, kd=0.1)
+        self.pid_offset = PIDController(kp=0.5, ki=0.01, kd=0.1)
         self.last_time = rospy.get_time()
 
-    def dis(self, data):
+    def dis_cakkback(self, data):
         self._dis = int(1000 * data.range)
 
     def right_roi_distance_callback(self, msg):
         self._right_roi_distance = msg.data
 
+    def offset_callback(self, msg):
+        self._offset = msg.data
+
     def limit_speed(self, speed):
         """將速度限制在設置的範圍內。"""
         return max(MIN_SPEED, min(MAX_SPEED, speed))
 
+    def turn_left(self):
+        rospy.loginfo("Turning left")
+        self.publish_wheel_cmd(0, TURN_SPEED)
+
+    def turn_right(self):
+        rospy.loginfo("Turning right")
+        self.publish_wheel_cmd(TURN_SPEED, 0)
+
+    '''
     def turn_left(self):
         rospy.loginfo("Turning left")
         left = self.limit_speed(0)
@@ -95,7 +112,7 @@ class WheelControlNode(DTROS):
         message.vel_left = left
         message.vel_right = right
         self._publisher.publish(message)
-
+    '''
     def forward(self):
         rospy.loginfo("Moving forward")
         left = self.limit_speed(self._vel_left)
@@ -103,6 +120,12 @@ class WheelControlNode(DTROS):
         message = WheelsCmdStamped()
         message.vel_left = left
         message.vel_right = right
+        self._publisher.publish(message)
+
+    def publish_wheel_cmd(self, left, right):
+        message = WheelsCmdStamped()
+        message.vel_left = self.limit_speed(left)
+        message.vel_right = self.limit_speed(right)
         self._publisher.publish(message)
 
     def straight_status_callback(self, msg):
@@ -129,23 +152,27 @@ class WheelControlNode(DTROS):
         self.last_time = current_time
 
         # 使用PID控制器計算調整
-        adjustment = self.pid.compute(0, angle, dt)
-        self.adjust_wheels_based_on_angle(adjustment)
+        angle_adjustment = self.pid_angle.compute(0, angle, dt)
+        offset_adjustment = self.pid_offset.compute(0, self._offset, dt)
+        combined_adjustment = angle_adjustment + offset_adjustment
+
+        self.adjust_wheels_based_on_adjustment(combined_adjustment)
+
 
     def adjust_wheels_based_on_angle(self, adjustment):
         # 根據PID調整值調整輪速
         if adjustment > 0:  # Turn right
-            left = self.limit_speed(self._vel_left * (1 + abs(adjustment) / 90))
-            right = self.limit_speed(self._vel_right * (1 - abs(adjustment) / 90))
-            rospy.loginfo(f"Adjusting wheels to turn right: left={left}, right={right}")
+            left = self._vel_left * (1 + abs(adjustment) / 90)
+            right = self._vel_right * (1 - abs(adjustment) / 90)
         else:  # Turn left
-            left = self.limit_speed(self._vel_left * (1 - abs(adjustment) / 90))
-            right = self.limit_speed(self._vel_right * (1 + abs(adjustment) / 90))
-            rospy.loginfo(f"Adjusting wheels to turn left: left={left}, right={right}")
-        message = WheelsCmdStamped()
-        message.vel_left = left
-        message.vel_right = right
-        self._publisher.publish(message)
+            left = self._vel_left * (1 - abs(adjustment) / 90)
+            right = self._vel_right * (1 + abs(adjustment) / 90)
+        
+        left = self.limit_speed(left)
+        right = self.limit_speed(right)
+        
+        rospy.loginfo(f"Adjusting wheels based on combined adjustment: left={left}, right={right}")
+        self.publish_wheel_cmd(left, right)
 
     def run(self):
         rospy.spin()
@@ -156,7 +183,19 @@ class WheelControlNode(DTROS):
             self._publisher.publish(stop)
         rospy.loginfo("Shut down completed")
 
+        # Unregister all subscribers and publishers
+        self.distance_subscriber.unregister()
+        self.straight_status_subscriber.unregister()
+        self.angle_subscriber.unregister()
+        self.right_roi_distance_subscriber.unregister()
+        self.offset_subscriber.unregister()
+        self._publisher.unregister()
+
 if __name__ == '__main__':
     node = WheelControlNode(node_name='wheel_control_node')
     rospy.on_shutdown(node.on_shutdown)
     node.run()
+
+'''
+20240706 使用PID控制馬達
+'''

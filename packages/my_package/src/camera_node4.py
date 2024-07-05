@@ -21,7 +21,7 @@ def angle_with_horizontal(x1, y1, x2, y2):
         else:
             return None
 
-# 
+# [直線]取得左、右車道邊線後繪製延伸線至頂部並回傳兩線段焦點位置
 def extend_line(x1, y1, x2, y2, height, image):
     if x2 != x1:
         slope = (y2 - y1) / (x2 - x1)
@@ -30,21 +30,21 @@ def extend_line(x1, y1, x2, y2, height, image):
             x_top = int(x1 + (y_top - y1) / slope)
             y_bottom = height
             x_bottom = int(x1 + (y_bottom - y1) / slope)
-        else:  # 水平线
+        else:  # 水平線
             x_top = x1
             x_bottom = x2
             y_top = y1
             y_bottom = y2
-    else:  # 垂直线
+    else:  # 垂直線
         x_top = x1
         x_bottom = x2
         y_top = 0
         y_bottom = height
 
-    cv2.line(image, (x_top, y_top), (x_bottom, y_bottom), (255, 0, 0), 5)
+    cv2.line(image, (x_top, y_top), (x_bottom, y_bottom), (255, 0, 0), 5) #藍線粗度5
     return (x_top, y_top, x_bottom, y_bottom)
 
-# 計算線段所夾角度
+# [轉彎]計算線段所夾角度 0-180度之間
 def angle_between_lines(line1, line2):
     def unit_vector(vector):
         return vector / np.linalg.norm(vector)
@@ -64,17 +64,31 @@ def angle_between_lines(line1, line2):
     
     return angle
 
-# 利用線段焦點找到路口
-def find_intersection(line1, line2):
+# [轉彎]利用線段交點找到路口
+def find_intersection(line1, line2, tolerance=1.0):
     x1, y1, x2, y2 = line1
     x3, y3, x4, y4 = line2
     denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
     if denom != 0:
         px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom
         py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
-        return (px, py)
+        # Check if the intersection point (px, py) is within tolerance of both line segments
+        if is_point_on_line_segment(px, py, line1, tolerance) and is_point_on_line_segment(px, py, line2, tolerance):
+            return (px, py)
+        else:
+            return None
     else:
         return None
+
+# [轉彎]線段交點誤差值子函式
+def is_point_on_line_segment(px, py, line, tolerance):
+    x1, y1, x2, y2 = line
+    min_x, max_x = min(x1, x2), max(x1, x2)
+    min_y, max_y = min(y1, y2), max(y1, y2)
+    
+    # Check if the point (px, py) is within the bounding box of the line segment with the given tolerance
+    return (min_x - tolerance <= px <= max_x + tolerance) and (min_y - tolerance <= py <= max_y + tolerance)
+
 
 # 繪製網格圖（用在main-camera）
 def draw_grid(image, grid_size=(5, 4)):
@@ -90,29 +104,14 @@ def draw_grid(image, grid_size=(5, 4)):
     
     return image
 
-# 計算距離
-def distance(x1, y1, width, height):
-    center_x = width / 2
-    center_y = height / 2
-    distance = np.sqrt((x1 - center_x) ** 2 + (y1 - center_y) ** 2)
+# [轉彎]計算與影像底部正中間的距離
+def dist_from_bottom_center(x1, y1, width, height):
+    button_center_x = width / 2
+    button_center_y = height
+    distance = np.sqrt((x1 - button_center_x) ** 2 + (y1 - button_center_y) ** 2)
     return distance
 
-# 計算x距離
-def x_distance(x1, width):
-    center_x = width / 2
-    x_distance = abs(x1 - center_x)
-    return x_distance
-
-#查表換算角度
-def lookup_xtable(distance):
-    if distance > 0 and distance <= 160:
-        return 70
-    elif distance > 160 and distance <= 320:
-        return 50
-    else:
-        return 0
-
-# 計算直線角度
+# [直線]計算直線角度
 def calculate_steering_angle(lines):
     if lines is None:
         return 0
@@ -127,7 +126,7 @@ def calculate_steering_angle(lines):
     return avg_angle
 
 
-# 計算偏差值
+# [直線]計算橫向偏移量
 def calculate_offset(image):
         height, width = image.shape[:2]
         center_x = width / 2
@@ -161,7 +160,7 @@ def calculate_offset(image):
         offset = center_x - lane_center
         return offset
 
-
+# [轉彎]判斷轉彎輔助線-虛線
 def is_dashed_line(points, length_threshold=100, gap_threshold=30):
     """
     判断是否为虚线。
@@ -186,19 +185,19 @@ def is_dashed_line(points, length_threshold=100, gap_threshold=30):
 
 
 def detect_curved_lane(image):
-    # 检查图像是否加载成功
+    # 檢查影像是否成功加入
     if image is None:
         print("Error: Image not found or unable to load.")
         return None
 
-    # 灰度化
+    # 灰度
     height, width = image.shape[:2]
     cropped_src = image[height // 2:height, :]
     red = cropped_src[:, :, 2]
 
     # 高斯模糊
     blur = cv2.GaussianBlur(red, (7, 7), 0)
-    # Canny边缘检测
+    # Canny邊緣檢測
     edges = cv2.Canny(blur, 50, 150)
 
     # EDLines
@@ -218,7 +217,7 @@ def detect_curved_lane(image):
 
         all_points = np.array(all_points, dtype=np.int32)
 
-        # 检查是否为虚线
+        # 檢查是否為虛線
         is_dashed, dashed_lines = is_dashed_line(all_points)
         if is_dashed:  # 如果检测到虚线
             dashed_points = np.array([pt for segment in dashed_lines for pt in segment], dtype=np.int32)
@@ -277,23 +276,23 @@ class CameraReaderNode(DTROS):
         #publisher angle
         self.angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/angles", Float32, queue_size=10)
 
-        #publisher inter_dis
+        #publisher 距離左/右側路口的距離
         self.right_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/right_dist", Float32, queue_size=10)
         self.left_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/left_dist", Float32, queue_size=10)
 
         #publisher straight status
         self.straight_status_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/straight_status", String, queue_size=10)
-
+        
+        #publisher offset
+        self.offset_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/offset", Float32, queue_size=10)
+        
         # 定義左右平行四邊形區域 ROI
         self.left_roi_points = np.array([[100, 240], [200, 240], [200, 480], [100, 480]], np.int32).reshape((-1, 1, 2))
         self.right_roi_points = np.array([[350, 240], [450, 240], [450, 480], [350, 480]], np.int32).reshape((-1, 1, 2))
 
-        #publisher offset
-        self.offset_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/offset", Float32, queue_size=10)
-
         # 初始狀態是直線
         self.state = "STRAIGHT"
-        self.turn_direction = "NONE" 
+        self.turn_direction = "NONE"
 
 
     # roi線段檢測
@@ -319,11 +318,6 @@ class CameraReaderNode(DTROS):
         vertical_lines = LineSegmentDetectionED(gaussian, min_line_len=min_line_len_vertical, line_fit_err_thres=1.4)
         # 使用 EDLines 進行線段檢測（横向）
         horizontal_lines = LineSegmentDetectionED(gaussian, min_line_len=min_line_len_horizontal, line_fit_err_thres=1.4)
-
-        left_lines = []
-        right_lines = []
-        center_x = w / 2
-
         # 判斷路口直角
         detected_right_angle = False
 
@@ -336,7 +330,7 @@ class CameraReaderNode(DTROS):
                     intersection = find_intersection(left_extended, right_extended)
                     if intersection:
                         angle = angle_between_lines(left_extended, right_extended)
-                        if angle is not None and (angle > 45 and angle <70):
+                        if angle is not None and (45 < angle <70):
                             detected_right_angle = True
                             cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 0, 255), 2)
                             cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 0, 255), 2)
@@ -412,13 +406,13 @@ class CameraReaderNode(DTROS):
 
         if right_detected_right_angle:
             print("Detected RIGHT_ROI right angle.")
-            dist = distance(right_vertical_lines[0][0], right_vertical_lines[0][1], width, height)
+            dist = dist_from_bottom_center(right_vertical_lines[0][0], right_vertical_lines[0][1], width, height)
             print(f"RIGHT_ROI Intersection Distance: {dist:.2f}")
             self.right_inter_dist_pub.publish(Float32(dist))
 
         if left_detected_right_angle:
             print("Detected LEFT_ROI right angle.")
-            dist = distance(left_vertical_lines[0][0], left_vertical_lines[0][1], width, height)
+            dist = dist_from_bottom_center(left_vertical_lines[0][0], left_vertical_lines[0][1], width, height)
             print(f"LEFT_ROI Intersection Distance: {dist:.2f}")
             self.left_inter_dist_pub.publish(Float32(dist))
 
@@ -461,19 +455,15 @@ class CameraReaderNode(DTROS):
             if left_lines:
                 left_line = np.mean(left_lines, axis=0).astype(int)
                 left_extended = extend_line(*left_line[:4], height, gaussian)
-                #cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
+                cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
 
-            '''
             if right_lines:
                 right_line = np.mean(right_lines, axis=0).astype(int)
                 right_extended = extend_line(*right_line[:4], height, gaussian)
-                #cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
+                cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
 
             if left_lines and right_lines:
-                intersection = find_intersection(left_extended, right_extended)
-                if intersection:
-                    cv2.circle(gaussian, (int(intersection[0]), int(intersection[1])), 10, (0, 0, 255), -1)
-            '''
+                find_intersection(left_extended, right_extended)
         return gaussian
     
     def check_straight(self, image):
@@ -481,8 +471,8 @@ class CameraReaderNode(DTROS):
         center_x = width / 2
         center_threshold = 20  # 閥值
 
-        left_processed_image, left_lines, _ = detect_lane(image.copy(), self.left_roi_points)
-        right_processed_image, right_lines, _ = detect_lane(image.copy(), self.right_roi_points)
+        left_processed_image, left_lines, _ = self.detect_lane(image.copy(), self.left_roi_points)
+        right_processed_image, right_lines, _ = self.detect_lane(image.copy(), self.right_roi_points)
 
         if left_lines is not None and right_lines is not None:
             left_line = np.mean(left_lines, axis=0).astype(int)
