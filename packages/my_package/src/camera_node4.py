@@ -22,7 +22,7 @@ def angle_with_horizontal(x1, y1, x2, y2):
         else:
             return None
 
-# [直線]取得左、右車道邊線後繪製延伸線至頂部並回傳兩線段焦點位置
+# [直線]取得線段後繪製延伸線至頂部和底部並回傳兩點位置
 def extend_line(x1, y1, x2, y2, height, image):
     if x2 == x1:  # 垂直线
         x_top = x1
@@ -44,6 +44,40 @@ def extend_line(x1, y1, x2, y2, height, image):
 
     cv2.line(image, (x_top, y_top), (x_bottom, y_bottom), (255, 0, 0), 5) #藍線粗度5
     return (x_top, y_top, x_bottom, y_bottom)
+
+# [直線]取得兩條線段的最短距離
+def calculate_line_distance(line1, line2):
+    def point_line_distance(px, py, x1, y1, x2, y2):
+        norm = np.linalg.norm([x2 - x1, y2 - y1])
+        return abs((px - x1) * (y2 - y1) - (py - y1) * (x2 - x1)) / norm
+
+    x1, y1, x2, y2 = line1
+    x3, y3, x4, y4 = line2
+
+    distances = [
+        point_line_distance(x1, y1, x3, y3, x4, y4),
+        point_line_distance(x2, y2, x3, y3, x4, y4),
+        point_line_distance(x3, y3, x1, y1, x2, y2),
+        point_line_distance(x4, y4, x1, y1, x2, y2)
+    ]
+    return min(distances)
+
+# [直線]根據距離過濾線段
+def filter_lines_by_distance(lines, distance_threshold):
+    filtered_lines = []
+    for i, line1 in enumerate(lines):
+        keep_line = True
+        for j, line2 in enumerate(lines):
+            if i != j:
+                distance = calculate_line_distance(line1, line2)
+                if distance < distance_threshold:
+                    keep_line = False
+                    break
+        if keep_line:
+            filtered_lines.append(line1)
+    return filtered_lines
+
+
 
 # [轉彎]計算線段所夾角度 0-180度之間
 def angle_between_lines(line1, line2):
@@ -450,18 +484,19 @@ class CameraReaderNode(DTROS):
         red = cropped_src[:, :, 2]
         # Apply Gaussian blur to remove noise and shadows
         gaussian = cv2.GaussianBlur(red, (5, 5), 0)
-        #edges = cv2.Canny(gaussian, 50, 150)
+        edges = cv2.Canny(gaussian, 50, 150)
         # Assume LineSegmentDetectionED is a function defined elsewhere
-        lines = LineSegmentDetectionED(gaussian, min_line_len=20, line_fit_err_thres=1.4)
+        lines = LineSegmentDetectionED(edges, min_line_len=25, line_fit_err_thres=1.4)
 
         left_lines = []
         right_lines = []
         center_x = width // 2
 
         if lines is not None and len(lines) > 0:
+            lines = filter_lines_by_distance(lines, 10)
             for line in lines:
                 x1, y1, x2, y2 = line[:4]
-                cv2.line(gaussian, (x1, y1), (x2, y2), (255, 255, 255), 1)
+                cv2.line(gaussian, (x1, y1), (x2, y2), (255, 255, 255), 2)
                 if x1 < center_x and x2 < center_x:
                     left_lines.append(line)
                 elif x1 > center_x and x2 > center_x:
