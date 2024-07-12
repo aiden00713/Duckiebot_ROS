@@ -9,6 +9,7 @@ from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge
 from std_msgs.msg import String, Float32
 import gc
+from collections import deque
 
 # 利用角忽略與水平線角度為0的情況
 def angle_with_horizontal(x1, y1, x2, y2):
@@ -21,25 +22,25 @@ def angle_with_horizontal(x1, y1, x2, y2):
         else:
             return None
 
-# [直線]繪製延伸線至影像頂部和底部並回傳兩線段焦點位置
+# [直線]取得左、右車道邊線後繪製延伸線至頂部並回傳兩線段焦點位置
 def extend_line(x1, y1, x2, y2, height, image):
-    if x2 != x1:
-        slope = (y2 - y1) / (x2 - x1)
-        if slope != 0:
-            y_top = 0
-            x_top = int(x1 + (y_top - y1) / slope)
-            y_bottom = height
-            x_bottom = int(x1 + (y_bottom - y1) / slope)
-        else:  # 水平線
-            x_top = x1
-            x_bottom = x2
-            y_top = y1
-            y_bottom = y2
-    else:  # 垂直線
+    if x2 == x1:  # 垂直线
         x_top = x1
         x_bottom = x2
         y_top = 0
         y_bottom = height
+    else:
+        slope = (y2 - y1) / (x2 - x1)
+        if slope == 0:  # 水平线
+            x_top = x1
+            x_bottom = x2
+            y_top = y1
+            y_bottom = y2
+        else:
+            y_top = 0
+            x_top = int(x1 + (y_top - y1) / slope)
+            y_bottom = height
+            x_bottom = int(x1 + (y_bottom - y1) / slope)
 
     cv2.line(image, (x_top, y_top), (x_bottom, y_bottom), (255, 0, 0), 5) #藍線粗度5
     return (x_top, y_top, x_bottom, y_bottom)
@@ -248,7 +249,18 @@ def detect_curved_lane(image):
     return image
 
 
+# 定义一个滑动窗口大小
+WINDOW_SIZE = 50
 
+# 初始化用于存储之前几帧线段数据的队列
+left_line_history = deque(maxlen=WINDOW_SIZE)
+right_line_history = deque(maxlen=WINDOW_SIZE)
+
+def smooth_lines(line_history, new_line):
+    # 将新线段加入历史记录
+    line_history.append(new_line)
+    # 计算历史记录中的平均值
+    return np.mean(line_history, axis=0).astype(int)
 
 class CameraReaderNode(DTROS):
 
@@ -330,10 +342,11 @@ class CameraReaderNode(DTROS):
                     intersection = find_intersection(left_extended, right_extended)
                     if intersection:
                         angle = angle_between_lines(left_extended, right_extended)
-                        if angle is not None and (45 < angle <70):
+                        if angle is not None and (60 < angle < 80):
                             detected_right_angle = True
                             cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 0, 255), 2)
                             cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 0, 255), 2)
+                            #print(f"Detected right angle at intersection: {intersection}, angle: {angle}")
                         else:
                             cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 255, 0), 2)
                             cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 255, 0), 2)
@@ -376,16 +389,17 @@ class CameraReaderNode(DTROS):
             if self.turn_direction == "RIGHT" or self.turn_direction == "LEFT":
                 self.handle_curved_lane(curved_lane_image)
         elif self.state == "TURN":
-            if self.check_straight(image):
+            '''if self.check_straight(image):
                 self.state = "STRAIGHT"
-                self.turn_direction = "NONE"
-        
+                self.turn_direction = "NONE"'''
+
 
         left_processed_image, left_vertical_lines, left_horizontal_lines, left_detected_right_angle = self.detect_lane(image.copy(), self.left_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
         right_processed_image, right_vertical_lines, right_horizontal_lines, right_detected_right_angle = self.detect_lane(image.copy(), self.right_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
 
         left_steering_angle = calculate_steering_angle(left_vertical_lines)
         right_steering_angle = calculate_steering_angle(right_vertical_lines)
+        print(f"right_steering_angle: {right_steering_angle}")
         
         processed_image = self.process_image(image.copy())
         height, width = processed_image.shape[:2]
@@ -423,8 +437,8 @@ class CameraReaderNode(DTROS):
         cv2.namedWindow(self._window_left, cv2.WINDOW_AUTOSIZE)
         cv2.namedWindow(self._window_right, cv2.WINDOW_AUTOSIZE)
         cv2.imshow(self._window, processed_image)
-        cv2.imshow(self._window_left, left_processed_image)
-        cv2.imshow(self._window_right, right_processed_image)
+        #cv2.imshow(self._window_left, left_processed_image)
+        #cv2.imshow(self._window_right, right_processed_image)
         cv2.waitKey(1)
 
     def process_image(self, src):
@@ -442,13 +456,12 @@ class CameraReaderNode(DTROS):
 
         left_lines = []
         right_lines = []
-        center_x = width / 2
-
-
+        center_x = width // 2
 
         if lines is not None and len(lines) > 0:
             for line in lines:
                 x1, y1, x2, y2 = line[:4]
+                cv2.line(gaussian, (x1, y1), (x2, y2), (255, 255, 255), 1)
                 if x1 < center_x and x2 < center_x:
                     left_lines.append(line)
                 elif x1 > center_x and x2 > center_x:
@@ -456,17 +469,19 @@ class CameraReaderNode(DTROS):
 
 
             if left_lines:
-                left_line = np.mean(left_lines, axis=0).astype(int)
-                left_extended = extend_line(*left_line[:4], height, gaussian)
-                cv2.line(gaussian, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
+                left_line = np.median(left_lines, axis=0).astype(int)
+                left_smoothed = smooth_lines(left_line_history, left_line)
+                left_extended = extend_line(*left_smoothed[:4], height, gaussian)
+                cv2.line(gaussian, (left_smoothed[0], left_smoothed[1]), (left_smoothed[2], left_smoothed[3]), (0, 255, 0), 2)
 
             if right_lines:
-                right_line = np.mean(right_lines, axis=0).astype(int)
-                right_extended = extend_line(*right_line[:4], height, gaussian)
-                cv2.line(gaussian, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
+                right_line = np.median(right_lines, axis=0).astype(int)
+                right_smoothed = smooth_lines(right_line_history, right_line)
+                right_extended = extend_line(*right_smoothed[:4], height, gaussian)
+                cv2.line(gaussian, (right_smoothed[0], right_smoothed[1]), (right_smoothed[2], right_smoothed[3]), (0, 255, 0), 2)
 
-            if left_lines and right_lines:
-                find_intersection(left_extended, right_extended)
+            '''if left_lines and right_lines:
+                find_intersection(left_extended, right_extended)'''
         
         cv2.line(gaussian, (center_x, 0), (center_x, height), (0, 255, 0), 2)
         
