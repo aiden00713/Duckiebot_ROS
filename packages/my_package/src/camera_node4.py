@@ -70,13 +70,27 @@ def filter_lines_by_distance(lines, distance_threshold):
         for j, line2 in enumerate(lines):
             if i != j:
                 distance = calculate_line_distance(line1, line2)
+                #print(f"Distance between line {i} and line {j}: {distance}")
                 if distance < distance_threshold:
                     keep_line = False
                     break
         if keep_line:
             filtered_lines.append(line1)
+    #print(f"Number of lines after filtering: {len(filtered_lines)}")
     return filtered_lines
 
+# 基于灰度值过滤线段
+def filter_lines_by_intensity(image, lines, intensity_threshold):
+    filtered_lines = []
+    for line in lines:
+        x1, y1, x2, y2 = map(int, line[:4])
+        # 提取线段两端点的灰度值
+        intensity1 = image[y1, x1]
+        intensity2 = image[y2, x2]
+        # 如果两端点的灰度值都低于阈值，则保留该线段
+        if intensity1 < intensity_threshold and intensity2 < intensity_threshold:
+            filtered_lines.append(line)
+    return filtered_lines
 
 
 # [轉彎]計算線段所夾角度 0-180度之間
@@ -284,7 +298,7 @@ def detect_curved_lane(image):
 
 
 # 定义一个滑动窗口大小
-WINDOW_SIZE = 50
+WINDOW_SIZE = 30
 
 # 初始化用于存储之前几帧线段数据的队列
 left_line_history = deque(maxlen=WINDOW_SIZE)
@@ -340,6 +354,73 @@ class CameraReaderNode(DTROS):
         self.state = "STRAIGHT"
         self.turn_direction = "NONE"
 
+    def process_image(self, src):
+        # Get dimensions of the image
+        height, width = src.shape[:2]
+        # Keep only the lower half of the image
+        cropped_src = src[height//2:height, :]
+        # Isolate the red channel
+        red = cropped_src[:, :, 2]
+        # Apply Gaussian blur to remove noise and shadows
+        gaussian = cv2.GaussianBlur(red, (5, 5), 0)
+        edges = cv2.Canny(gaussian, 50, 150)
+
+        # Debugging: Show intermediate images
+        #cv2.imshow("Red Channel", red)
+        #cv2.imshow("Gaussian Blur", gaussian)
+        #cv2.imshow("Canny Edges", edges)
+
+        # Assume LineSegmentDetectionED is a function defined elsewhere
+        lines = LineSegmentDetectionED(edges, min_line_len=20, line_fit_err_thres=1.4)
+
+        left_lines = []
+        right_lines = []
+        center_x = width // 2
+
+        if lines is not None and len(lines) > 0:
+            # 基于灰度值过滤线段
+            lines = filter_lines_by_intensity(gaussian, lines, 30)
+            # 根据距离阈值过滤线段
+            lines = filter_lines_by_distance(lines, 15)
+
+    
+            for line in lines:
+                x1, y1, x2, y2 = line[:4]
+                cv2.line(gaussian, (x1, y1), (x2, y2), (255, 255, 255), 2)
+                if x1 < center_x and x2 < center_x:
+                    left_lines.append(line)
+                elif x1 > center_x and x2 > center_x:
+                    right_lines.append(line)
+
+            print(f"Left lines: {len(left_lines)}, Right lines: {len(right_lines)}")
+
+            if left_lines:
+                left_line = np.median(left_lines, axis=0).astype(int)
+                left_smoothed = smooth_lines(left_line_history, left_line)
+                left_extend = extend_line(*left_smoothed[:4], height, gaussian)
+                cv2.line(gaussian, (left_smoothed[0], left_smoothed[1]), (left_smoothed[2], left_smoothed[3]), (0, 255, 0), 2)
+
+            if right_lines:
+                right_line = np.median(right_lines, axis=0).astype(int)
+                right_smoothed = smooth_lines(right_line_history, right_line)
+                right_extend = extend_line(*right_smoothed[:4], height, gaussian)
+                cv2.line(gaussian, (right_smoothed[0], right_smoothed[1]), (right_smoothed[2], right_smoothed[3]), (0, 255, 0), 2)
+
+        
+        left_line = np.mean(left_lines, axis=0).astype(int) if left_lines else [0, 0, 0, 0]
+        right_line = np.mean(right_lines, axis=0).astype(int) if right_lines else [width, 0, width, 0]
+
+        left_x1, left_y1, left_x2, left_y2 = left_line
+        right_x1, right_y1, right_x2, right_y2 = right_line
+
+        left_x_intercept = left_x1 + (left_x2 - left_x1) * (height - left_y1) / (left_y2 - left_y1) if left_y2 != left_y1 else left_x1
+        right_x_intercept = right_x1 + (right_x2 - right_x1) * (height - right_y1) / (right_y2 - right_y1) if right_y2 != right_y1 else right_x1
+
+        lane_center = (left_x_intercept + right_x_intercept) / 2
+        offset = center_x - lane_center
+
+        cv2.line(gaussian, (center_x, 0), (center_x, height), (0, 255, 0), 2)    
+        return gaussian, offset
 
     # roi線段檢測
     def detect_lane(self, frame, roi_points, min_line_len_vertical, min_line_len_horizontal):
@@ -435,16 +516,14 @@ class CameraReaderNode(DTROS):
         right_steering_angle = calculate_steering_angle(right_vertical_lines)
         print(f"right_steering_angle: {right_steering_angle}")
         
-        processed_image = self.process_image(image.copy())
-        height, width = processed_image.shape[:2]
-
-        offset = calculate_offset(processed_image)
+        processed_image, offset = self.process_image(image.copy())
         self.offset_pub.publish(offset)
         print(f"Current offset: {offset}")
 
+        height, width = processed_image.shape[:2]
+
         #print(f"Left Steering Angle: {left_steering_angle:.2f} degrees")
         #print(f"Right Steering Angle: {right_steering_angle:.2f} degrees")
-
 
         # 發布目前狀態
         status_message = f"{self.state},{self.turn_direction}"
@@ -475,53 +554,6 @@ class CameraReaderNode(DTROS):
         #cv2.imshow(self._window_right, right_processed_image)
         cv2.waitKey(1)
 
-    def process_image(self, src):
-        # Get dimensions of the image
-        height, width = src.shape[:2]
-        # Keep only the lower half of the image
-        cropped_src = src[height//2:height, :]
-        # Isolate the red channel
-        red = cropped_src[:, :, 2]
-        # Apply Gaussian blur to remove noise and shadows
-        gaussian = cv2.GaussianBlur(red, (5, 5), 0)
-        edges = cv2.Canny(gaussian, 50, 150)
-        # Assume LineSegmentDetectionED is a function defined elsewhere
-        lines = LineSegmentDetectionED(edges, min_line_len=25, line_fit_err_thres=1.4)
-
-        left_lines = []
-        right_lines = []
-        center_x = width // 2
-
-        if lines is not None and len(lines) > 0:
-            lines = filter_lines_by_distance(lines, 10)
-            for line in lines:
-                x1, y1, x2, y2 = line[:4]
-                cv2.line(gaussian, (x1, y1), (x2, y2), (255, 255, 255), 2)
-                if x1 < center_x and x2 < center_x:
-                    left_lines.append(line)
-                elif x1 > center_x and x2 > center_x:
-                    right_lines.append(line)
-
-
-            if left_lines:
-                left_line = np.median(left_lines, axis=0).astype(int)
-                left_smoothed = smooth_lines(left_line_history, left_line)
-                left_extended = extend_line(*left_smoothed[:4], height, gaussian)
-                cv2.line(gaussian, (left_smoothed[0], left_smoothed[1]), (left_smoothed[2], left_smoothed[3]), (0, 255, 0), 2)
-
-            if right_lines:
-                right_line = np.median(right_lines, axis=0).astype(int)
-                right_smoothed = smooth_lines(right_line_history, right_line)
-                right_extended = extend_line(*right_smoothed[:4], height, gaussian)
-                cv2.line(gaussian, (right_smoothed[0], right_smoothed[1]), (right_smoothed[2], right_smoothed[3]), (0, 255, 0), 2)
-
-            '''if left_lines and right_lines:
-                find_intersection(left_extended, right_extended)'''
-        
-        cv2.line(gaussian, (center_x, 0), (center_x, height), (0, 255, 0), 2)
-        
-        return gaussian
-    
     def check_straight(self, image):
         height, width = image.shape[:2]
         center_x = width / 2
