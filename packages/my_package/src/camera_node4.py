@@ -21,7 +21,7 @@ def angle_with_horizontal(x1, y1, x2, y2):
         else:
             return None
 
-# [直線]取得左、右車道邊線後繪製延伸線至頂部並回傳兩線段焦點位置
+# [直線]繪製延伸線至影像頂部和底部並回傳兩線段焦點位置
 def extend_line(x1, y1, x2, y2, height, image):
     if x2 != x1:
         slope = (y2 - y1) / (x2 - x1)
@@ -435,7 +435,7 @@ class CameraReaderNode(DTROS):
         # Isolate the red channel
         red = cropped_src[:, :, 2]
         # Apply Gaussian blur to remove noise and shadows
-        gaussian = cv2.GaussianBlur(red, (7, 7), 0)
+        gaussian = cv2.GaussianBlur(red, (5, 5), 0)
         #edges = cv2.Canny(gaussian, 50, 150)
         # Assume LineSegmentDetectionED is a function defined elsewhere
         lines = LineSegmentDetectionED(gaussian, min_line_len=20, line_fit_err_thres=1.4)
@@ -444,13 +444,16 @@ class CameraReaderNode(DTROS):
         right_lines = []
         center_x = width / 2
 
-        if lines is not None:
+
+
+        if lines is not None and len(lines) > 0:
             for line in lines:
                 x1, y1, x2, y2 = line[:4]
                 if x1 < center_x and x2 < center_x:
                     left_lines.append(line)
                 elif x1 > center_x and x2 > center_x:
                     right_lines.append(line)
+
 
             if left_lines:
                 left_line = np.mean(left_lines, axis=0).astype(int)
@@ -464,6 +467,9 @@ class CameraReaderNode(DTROS):
 
             if left_lines and right_lines:
                 find_intersection(left_extended, right_extended)
+        
+        cv2.line(gaussian, (center_x, 0), (center_x, height), (0, 255, 0), 2)
+        
         return gaussian
     
     def check_straight(self, image):
