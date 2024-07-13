@@ -28,6 +28,7 @@ def filter_lines_by_angle(lines):
         x1, y1, x2, y2 = line[:4]
         if angle_with_horizontal(x1, y1, x2, y2):
             filtered_lines.append(line)
+    #print(f"Number of lines after angle filtering: {len(filtered_lines)}")
     return filtered_lines
 
 # [直線]取得線段後繪製延伸線至頂部和底部並回傳兩點位置
@@ -80,7 +81,7 @@ def filter_lines_by_distance(lines, distance_threshold_min, distance_threshold_m
         for j, line2 in enumerate(lines):
             if i != j:
                 distance = calculate_line_distance(line1, line2)
-                print(f"Distance between line {i} and line {j}: {distance}")
+                #print(f"Distance between line {i} and line {j}: {distance}")
                 if distance_threshold_min < distance < distance_threshold_max:
                     keep_line = True
                     break
@@ -88,21 +89,25 @@ def filter_lines_by_distance(lines, distance_threshold_min, distance_threshold_m
         if keep_line:
             filtered_lines.append(line1)
             filtered_lines.append(line2)
-    print(f"Number of lines after filtering: {len(filtered_lines)}")
+    #print(f"Number of lines after distance filtering: {len(filtered_lines)}")
     return filtered_lines
 
 # 基于灰度值过滤线段
 def filter_lines_by_intensity(image, lines, intensity_threshold):
+    height, width = image.shape[:2]
     filtered_lines = []
     for line in lines:
         x1, y1, x2, y2 = map(int, line[:4])
-        # 提取线段两端点的灰度值
-        intensity1 = image[y1, x1]
-        intensity2 = image[y2, x2]
-        #print(f"Intensity of line endpoints: ({intensity1}, {intensity2})")
-        # 如果两端点的灰度值都低於阈值，则保留该线段 顏色越深灰值越低
+        # Ensure coordinates are within image bounds
+        if 0 <= x1 < width and 0 <= y1 < height and 0 <= x2 < width and 0 <= y2 < height:
+            # 提取线段两端点的灰度值
+            intensity1 = image[y1, x1]
+            intensity2 = image[y2, x2]
+            #print(f"Intensity of line endpoints: ({intensity1}, {intensity2})")
+            # 如果两端点的灰度值都低於阈值，则保留该线段 顏色越深灰值越低
         if intensity1 < intensity_threshold and intensity2 < intensity_threshold:
             filtered_lines.append(line)
+    #print(f"Number of lines after intensity filtering: {len(filtered_lines)}")
     return filtered_lines
 
 
@@ -311,7 +316,7 @@ def detect_curved_lane(image):
 
 
 # 定义一个滑动窗口大小
-WINDOW_SIZE = 30
+WINDOW_SIZE = 20
 
 # 初始化用于存储之前几帧线段数据的队列
 left_line_history = deque(maxlen=WINDOW_SIZE)
@@ -376,7 +381,7 @@ class CameraReaderNode(DTROS):
         red = cropped_src[:, :, 2]
         # Apply Gaussian blur to remove noise and shadows
         gaussian = cv2.GaussianBlur(red, (5, 5), 0)
-        edges = cv2.Canny(gaussian, 50, 150)
+        edges = cv2.Canny(gaussian, 70, 210)
 
         # Debugging: Show intermediate images
         #cv2.imshow("Red Channel", red)
@@ -385,11 +390,11 @@ class CameraReaderNode(DTROS):
 
         # Assume LineSegmentDetectionED is a function defined elsewhere
         lines = LineSegmentDetectionED(edges, min_line_len=20, line_fit_err_thres=1.4)
+        #lines = LineSegmentDetectionED(gaussian, min_line_len=20, line_fit_err_thres=1.4)
         
         '''
         # Debugging: Draw all detected lines before filtering
-        global debug_image
-        debug_image = gaussian.copy()
+        debug_image = edges.copy()
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = map(int, line[:4])
@@ -407,7 +412,7 @@ class CameraReaderNode(DTROS):
             # 根據影像灰值過濾線段
             lines = filter_lines_by_intensity(gaussian, lines, 100)
             # 根據距離閥值過濾線段 min-max
-            lines = filter_lines_by_distance(lines, 10, 30)
+            lines = filter_lines_by_distance(lines, 100, 200)
 
             
             for line in lines:
