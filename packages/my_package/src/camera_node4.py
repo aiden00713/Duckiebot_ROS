@@ -14,13 +14,21 @@ from collections import deque
 # 利用角忽略與水平線角度為0的情況
 def angle_with_horizontal(x1, y1, x2, y2):
     angle = np.degrees(np.arctan2(y2 - y1, x2 - x1)) % 180
-    if angle == 0:
-        return None
+    if angle == 0 or angle == 180:
+        return False
     else:
-        if angle > 30 and angle < 165:
-            return angle
+        if 30 < angle < 150:  # Adjust these thresholds based on your needs
+            return True
         else:
-            return None
+            return False
+        
+def filter_lines_by_angle(lines):
+    filtered_lines = []
+    for line in lines:
+        x1, y1, x2, y2 = line[:4]
+        if angle_with_horizontal(x1, y1, x2, y2):
+            filtered_lines.append(line)
+    return filtered_lines
 
 # [直線]取得線段後繪製延伸線至頂部和底部並回傳兩點位置
 def extend_line(x1, y1, x2, y2, height, image):
@@ -49,6 +57,8 @@ def extend_line(x1, y1, x2, y2, height, image):
 def calculate_line_distance(line1, line2):
     def point_line_distance(px, py, x1, y1, x2, y2):
         norm = np.linalg.norm([x2 - x1, y2 - y1])
+        if norm == 0:
+            return np.inf
         return abs((px - x1) * (y2 - y1) - (py - y1) * (x2 - x1)) / norm
 
     x1, y1, x2, y2 = line1
@@ -63,20 +73,22 @@ def calculate_line_distance(line1, line2):
     return min(distances)
 
 # [直線]根據距離過濾線段
-def filter_lines_by_distance(lines, distance_threshold):
+def filter_lines_by_distance(lines, distance_threshold_min, distance_threshold_max):
     filtered_lines = []
     for i, line1 in enumerate(lines):
-        keep_line = True
+        keep_line = False
         for j, line2 in enumerate(lines):
             if i != j:
                 distance = calculate_line_distance(line1, line2)
-                #print(f"Distance between line {i} and line {j}: {distance}")
-                if distance < distance_threshold:
-                    keep_line = False
+                print(f"Distance between line {i} and line {j}: {distance}")
+                if distance_threshold_min < distance < distance_threshold_max:
+                    keep_line = True
                     break
+
         if keep_line:
             filtered_lines.append(line1)
-    #print(f"Number of lines after filtering: {len(filtered_lines)}")
+            filtered_lines.append(line2)
+    print(f"Number of lines after filtering: {len(filtered_lines)}")
     return filtered_lines
 
 # 基于灰度值过滤线段
@@ -87,7 +99,8 @@ def filter_lines_by_intensity(image, lines, intensity_threshold):
         # 提取线段两端点的灰度值
         intensity1 = image[y1, x1]
         intensity2 = image[y2, x2]
-        # 如果两端点的灰度值都低于阈值，则保留该线段
+        #print(f"Intensity of line endpoints: ({intensity1}, {intensity2})")
+        # 如果两端点的灰度值都低於阈值，则保留该线段 顏色越深灰值越低
         if intensity1 < intensity_threshold and intensity2 < intensity_threshold:
             filtered_lines.append(line)
     return filtered_lines
@@ -372,20 +385,34 @@ class CameraReaderNode(DTROS):
 
         # Assume LineSegmentDetectionED is a function defined elsewhere
         lines = LineSegmentDetectionED(edges, min_line_len=20, line_fit_err_thres=1.4)
+        
+        '''
+        # Debugging: Draw all detected lines before filtering
+        global debug_image
+        debug_image = gaussian.copy()
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = map(int, line[:4])
+                cv2.line(debug_image, (x1, y1), (x2, y2), (255, 255, 255), 2)
+        cv2.imshow("All Detected Lines", debug_image)
+        '''
 
         left_lines = []
         right_lines = []
         center_x = width // 2
 
         if lines is not None and len(lines) > 0:
-            # 基于灰度值过滤线段
-            lines = filter_lines_by_intensity(gaussian, lines, 30)
-            # 根据距离阈值过滤线段
-            lines = filter_lines_by_distance(lines, 15)
+            # 根據角度忽略水平線
+            lines = filter_lines_by_angle(lines)
+            # 根據影像灰值過濾線段
+            lines = filter_lines_by_intensity(gaussian, lines, 100)
+            # 根據距離閥值過濾線段 min-max
+            lines = filter_lines_by_distance(lines, 10, 30)
 
-    
+            
             for line in lines:
                 x1, y1, x2, y2 = line[:4]
+
                 cv2.line(gaussian, (x1, y1), (x2, y2), (255, 255, 255), 2)
                 if x1 < center_x and x2 < center_x:
                     left_lines.append(line)
@@ -406,6 +433,16 @@ class CameraReaderNode(DTROS):
                 right_extend = extend_line(*right_smoothed[:4], height, gaussian)
                 cv2.line(gaussian, (right_smoothed[0], right_smoothed[1]), (right_smoothed[2], right_smoothed[3]), (0, 255, 0), 2)
 
+            '''
+            # Output the distances for debugging
+            for i, line1 in enumerate(lines):
+                for j, line2 in enumerate(lines):
+                    if i != j:
+                        distance = calculate_line_distance(line1, line2)
+                        midpoint_x = (line1[0] + line1[2] + line2[0] + line2[2]) // 8
+                        midpoint_y = (line1[1] + line1[3] + line2[1] + line2[3]) // 8
+                        cv2.putText(gaussian, f"{distance:.2f}", (midpoint_x, midpoint_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            '''
         
         left_line = np.mean(left_lines, axis=0).astype(int) if left_lines else [0, 0, 0, 0]
         right_line = np.mean(right_lines, axis=0).astype(int) if right_lines else [width, 0, width, 0]
