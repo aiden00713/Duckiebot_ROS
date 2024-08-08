@@ -4,18 +4,20 @@ import math
 import collections
 import rospy
 from duckietown.dtros import DTROS, NodeType
-from duckietown_msgs.msg import WheelsCmdStamped
+from duckietown_msgs.msg import WheelsCmdStamped, Twist2DStamped
 from sensor_msgs.msg import Range
 from std_msgs.msg import Float32, String
 
 # Angular velocities for each wheel (quarter rotation a second)
 W_LEFT = 0.8 * (2 * math.pi)  # 表示每秒左輪轉 0.5 圈
-W_RIGHT = 0.5 * (2 * math.pi)  # 表示每秒右輪轉 0.5 圍
+W_RIGHT = 0.5 * (2 * math.pi)  # 表示每秒右輪轉 0.5 圈
+VELOCITY = 0.3  # linear vel    , in m/s    , forward (+)
+OMEGA = 4.0
 TURN_SPEED = 0.3  # 調整此值以控制轉彎的靈敏度
 MAX_SPEED = 0.4  # 最大速度限制
-MIN_SPEED = 0.1  # 最小速度限制
+MIN_SPEED = -0.4  # 最小速度限制
 
-TURN_DISTANCE_THRESHOLD = 240  # 轉彎距離閾值
+TURN_DISTANCE_THRESHOLD = 380  # 轉彎距離閾值
 OFFSET_WINDOW_SIZE = 10  # 移动平均窗口大小
 ANGLE_SMOOTHING_WINDOW = 10
 
@@ -25,6 +27,7 @@ class WheelControlNode(DTROS):
         self._vehicle_name = os.environ['VEHICLE_NAME']
         wheels_topic = f"/{self._vehicle_name}/wheels_driver_node/wheels_cmd"
         wheel_radius_param = f"/{self._vehicle_name}/kinematics_node/radius"
+        twist_topic = f"/{self._vehicle_name}/car_cmd_switch_node/cmd"
 
         # 獲取Duckiebot的輪徑
         wheel_radius = rospy.get_param(wheel_radius_param)
@@ -34,20 +37,26 @@ class WheelControlNode(DTROS):
         self._vel_right = W_RIGHT * wheel_radius
         print(f"INIT VEL LEFT {self._vel_left} INIT VEL RIGHT {self._vel_right}")
 
+        self._v = VELOCITY
+        self._omega = OMEGA
+
         # ToF傳感器和相機節點角度和距離的主題
         #self._tof = f"/{self._vehicle_name}/front_center_tof_driver_node/range"
         self._straight_status_topic = f"/{self._vehicle_name}/camera_node/straight_status"
         self._angle_topic = f"/{self._vehicle_name}/camera_node/angles"
         self._offset_topic = f"/{self._vehicle_name}/camera_node/offset"
+        self._inter_distance_topic = f"/{self._vehicle_name}/camera_node/inter_dist"
         self._right_roi_distance_topic = f"/{self._vehicle_name}/camera_node/right_dist"
         self._left_roi_distance_topic = f"/{self._vehicle_name}/camera_node/left_dist"
 
         # 構造發布者和訂閱者
-        self._publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
+        #self._publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
+        self._publisher = rospy.Publisher(twist_topic, Twist2DStamped, queue_size=1)
         #self.distance_subscriber = rospy.Subscriber(self._tof, Range, self.dis_callback)
         self.straight_status_subscriber = rospy.Subscriber(self._straight_status_topic, String, self.straight_status_callback)
         self.angle_subscriber = rospy.Subscriber(self._angle_topic, Float32, self.angle_callback)
         self.offset_subscriber = rospy.Subscriber(self._offset_topic, Float32, self.offset_callback)
+        self.inter_distance_subscriber = rospy.Subscriber(self._inter_distance_topic, Float32, self.inter_distance_callback)
         self.right_roi_distance_subscriber = rospy.Subscriber(self._right_roi_distance_topic, Float32, self.right_roi_distance_callback)
 
         # 狀態變量
@@ -67,6 +76,9 @@ class WheelControlNode(DTROS):
 
     def dis_callback(self, data):
         self._dis = int(1000 * data.range)
+
+    def inter_distance_callback(self, msg):
+        self._inter_distance = msg.data
 
     def right_roi_distance_callback(self, msg):
         self._right_roi_distance = msg.data
@@ -88,20 +100,39 @@ class WheelControlNode(DTROS):
 
     def turn_left(self):
         print("Turning left")
-        self.publish_wheel_cmd(0, TURN_SPEED)
+        #left = 0.1 * par + (t * par) / (div + 3)
+        #right = 2.5 * par + (t * par) / div
+        #self.publish_wheel_cmd(0, TURN_SPEED)
+        #self.publish_wheel_cmd(vel_left=left, vel_right=right)
+        message = Twist2DStamped(v = 0.8, omega = 3.0)
+        self._publisher.publish(message)
+        rospy.Timer(rospy.Duration(3), self.stop, oneshot=True)
 
     def turn_right(self):
         print("Turning right")
-        self.publish_wheel_cmd(TURN_SPEED, 0)
+        #left = 2.5 * par + (t * par) / div  # 计算左轮速度
+        #right = 0.1 * par + (t * par) / (div + 3)  # 计算右轮速度
+        #self.publish_wheel_cmd(vel_left=left, vel_right=right)
+        message = Twist2DStamped(v = 0.18, omega = -3.0)
+        self._publisher.publish(message)
+        rospy.Timer(rospy.Duration(3), self.stop, oneshot=True)
 
     def forward(self):
         print("Moving forward")
         left = self.limit_speed(self._vel_left)
         right = self.limit_speed(self._vel_right)
-        message = WheelsCmdStamped()
-        message.vel_left = left
-        message.vel_right = right
+
+        #message = WheelsCmdStamped(vel_left = left, vel_right = right)
+        message = Twist2DStamped(v = 0.2, omega = 0)
+
         self._publisher.publish(message)
+
+    def stop(self, event):
+        message = Twist2DStamped(v=0, omega=0)
+        self._publisher.publish(message)
+        rospy.loginfo("Stopped the robot")
+
+
 
     def publish_wheel_cmd(self, left, right):
         message = WheelsCmdStamped()
@@ -113,8 +144,9 @@ class WheelControlNode(DTROS):
         status, direction = msg.data.split(",")
         self.state = status
         self.turn_direction = direction
-        print(f"Straight Status: {self.state}, Turn Direction: {self.turn_direction}")
+        #print(f"Straight Status: {self.state}, Turn Direction: {self.turn_direction}")
 
+        '''
         if self.state == "TURN":
             if self._right_roi_distance < TURN_DISTANCE_THRESHOLD:
                 if self.turn_direction == "LEFT":
@@ -125,11 +157,26 @@ class WheelControlNode(DTROS):
                 self.forward()
         elif self.state == "STRAIGHT":
             self.forward()
+        '''
+
+        if self.state == "TURN":
+            if self.turn_direction == "LEFT" and self._inter_distance < TURN_DISTANCE_THRESHOLD :
+                self.turn_left()
+            elif self.turn_direction == "RIGHT" and self._inter_distance < TURN_DISTANCE_THRESHOLD:
+                self.turn_right()
+        elif self.state == "STRAIGHT":
+            self.forward()
 
     def adjust_wheels_based_on_offset_and_angle(self):
-        # 计算平滑后的偏移量
-        smoothed_offset = sum(self.offset_window) / len(self.offset_window) if self.offset_window else self._offset
-        smoothed_angle = sum(self.angle_window) / len(self.angle_window) if self.angle_window else self._angle
+        # 計算平滑後的偏移量
+        # 使用平均的方式
+        #smoothed_offset = sum(self.offset_window) / len(self.offset_window) if self.offset_window else self._offset
+        #smoothed_angle = sum(self.angle_window) / len(self.angle_window) if self.angle_window else self._angle
+
+        # 使用不同權重的方式
+        smoothed_offset = self.calculate_smoothed_value(self.offset_window)
+        smoothed_angle = self.calculate_smoothed_value(self.angle_window)
+
         # 根據偏移量和角度計算調整值
         adjustment = self.calculate_combined_adjustment(smoothed_offset, smoothed_angle)
 
@@ -155,6 +202,14 @@ class WheelControlNode(DTROS):
         combined_adjustment = max(-0.5, min(0.5, combined_adjustment))  # 限制調整值的範圍
         #rospy.loginfo(f"Calculated combined adjustment: {combined_adjustment} (offset: {offset_adjustment}, angle: {angle_adjustment})")
         return combined_adjustment
+    
+    def calculate_smoothed_value(self, data, alpha=0.25):
+        if not data:
+            return 0
+        ewma = data[0]
+        for value in data[1:]:
+            ewma = (1 - alpha) * ewma + alpha * value
+        return ewma
 
     def run(self):
         rospy.spin()
@@ -179,5 +234,5 @@ if __name__ == '__main__':
     node.run()
 
 '''
-20240714 不使用PID控制 僅使用角度和偏移量控制馬達 WINDOWS_SIZE=10
+20240719 不使用PID控制 僅使用角度和偏移量控制馬達 WINDOWS_SIZE=10 加入TCP smooth的方式 alpha=0.125
 '''
