@@ -11,6 +11,9 @@ from std_msgs.msg import String, Float32
 import gc
 from collections import deque
 
+width = 640
+height = 480
+
 # [轉彎]計算線段所夾角度 0-180度之間
 def angle_between_lines(line1, line2):
     def unit_vector(vector):
@@ -102,7 +105,7 @@ def is_dashed_line(points, length_min, length_max, gap_min, gap_max):
 
 
 
-def detect_curved_lane(src):
+def detect_curved_lane(src, inter_dist_pub):
     # 檢查影像是否成功加入
     if src is None:
         print("Error: Image not found or unable to load.")
@@ -159,6 +162,10 @@ def detect_curved_lane(src):
                 (x1, y1), (x2, y2) = segment
                 cv2.line(gaussian, (x1, y1), (x2, y2), (0, 255, 0), 1)
 
+                dist = dist_from_bottom_center(x1, y1, 640, 480)
+                inter_dist_pub.publish(Float32(dist))
+                print(f"bottom center: {dist}")
+
             # 繪製弧線
             for i in range(len(x_new) - 1):
                 cv2.line(gaussian, (int(x_new[i]), int(y_new[i])), (int(x_new[i + 1]), int(y_new[i + 1])), (0, 0, 255), 3)
@@ -199,6 +206,9 @@ class CameraReaderNode(DTROS):
         #publisher 距離左/右側路口的距離
         self.right_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/right_dist", Float32, queue_size=10)
         self.left_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/left_dist", Float32, queue_size=10)
+
+        #publisher 距離路口虛線的距離
+        self.inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/inter_dist", Float32, queue_size=10)
 
         #publisher straight status
         self.straight_status_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/straight_status", String, queue_size=10)
@@ -273,7 +283,7 @@ class CameraReaderNode(DTROS):
         left_processed_image, left_vertical_lines, left_horizontal_lines, left_detected_right_angle = self.detect_lane(image.copy(), self.left_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
         right_processed_image, right_vertical_lines, right_horizontal_lines, right_detected_right_angle = self.detect_lane(image.copy(), self.right_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
 
-        # 狀態轉換
+        # 狀態轉換-沒有用了
         if self.state == "STRAIGHT":
             if right_detected_right_angle:
                 self.state = "PREPARE_TURN"
@@ -286,15 +296,16 @@ class CameraReaderNode(DTROS):
                 dynamic_min_line_len_vertical = 5
                 dynamic_min_line_len_horizontal = 10
         elif self.state == "PREPARE_TURN":
-            if self.turn_direction == "RIGHT" and not right_detected_right_angle:
+            if not right_detected_right_angle and not left_detected_right_angle:
                 self.state = "TURN"
-            elif self.turn_direction == "LEFT" and not left_detected_right_angle:
-                self.state = "TURN"
-            if self.turn_direction == "RIGHT" or self.turn_direction == "LEFT":
-                curved_lane_image, is_curved = detect_curved_lane(image.copy())
+
+            '''if self.turn_direction == "RIGHT" or self.turn_direction == "LEFT":
+                curved_lane_image, is_curved = detect_curved_lane(image.copy(), self.inter_dist_pub)
                 if is_curved:
                     self.handle_curved_lane(curved_lane_image)
+                    '''
         elif self.state == "TURN":
+            pass
             '''if self.check_straight(image):
                 self.state = "STRAIGHT"
                 self.turn_direction = "NONE"'''
@@ -305,7 +316,7 @@ class CameraReaderNode(DTROS):
         print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
 
         height, width = image.shape[:2]
-
+        '''
         if right_detected_right_angle:
             print("Detected RIGHT_ROI right angle.")
             dist = dist_from_bottom_center(right_vertical_lines[0][0], right_vertical_lines[0][1], width, height)
@@ -317,9 +328,9 @@ class CameraReaderNode(DTROS):
             dist = dist_from_bottom_center(left_vertical_lines[0][0], left_vertical_lines[0][1], width, height)
             print(f"LEFT_ROI Intersection Distance: {dist:.2f}")
             self.left_inter_dist_pub.publish(Float32(dist))
-
+        '''
         # Detect curved lane
-        curved_lane_image, is_curved = detect_curved_lane(image.copy())
+        curved_lane_image, is_curved = detect_curved_lane(image.copy(), self.inter_dist_pub)
 
         # Display the processed image
         cv2.namedWindow(self._window_curved, cv2.WINDOW_AUTOSIZE)
