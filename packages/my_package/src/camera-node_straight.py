@@ -182,32 +182,25 @@ class CameraReaderNode(DTROS):
         # static parameters
         self._vehicle_name = os.environ['VEHICLE_NAME']
         print(self._vehicle_name)
-        self._camera_topic = f"/{self._vehicle_name}/camera_node/image/compressed"
+        self._camera_topic = f"/{self._vehicle_name}/camera_node_straight/image/compressed"
 
         # bridge between OpenCV and ROS
         self._bridge = CvBridge()
 
         # create window
-        self._window = "MAIN_camera-reader"
+        self._window = "[STRAIGHT] Main"
 
         # construct subscriber
         self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
 
         #publisher angle
-        self.angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/angles", Float32, queue_size=10)
+        self.angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_straight/angles", Float32, queue_size=10)
 
-        #publisher 距離左/右側路口的距離
-        self.right_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/right_dist", Float32, queue_size=10)
-        self.left_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/left_dist", Float32, queue_size=10)
-
-        #publisher straight status
-        self.straight_status_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/straight_status", String, queue_size=10)
-        
         #publisher offset
-        self.offset_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/offset", Float32, queue_size=10)
+        self.offset_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_straight/offset", Float32, queue_size=10)
         
         # 初始狀態是直線
-        self.state = "STRAIGHT"
+        self.state = "IDLE"
         self.turn_direction = "NONE"
 
     # [直線]主判斷程式
@@ -328,7 +321,7 @@ class CameraReaderNode(DTROS):
 if __name__ == '__main__':
     try:
         # create the node
-        node = CameraReaderNode(node_name='camera_reader_node')
+        node = CameraReaderNode(node_name='camera_node_straight')
         # keep spinning
         rospy.spin()
     except rospy.ROSInterruptException:

@@ -146,8 +146,8 @@ def detect_curved_lane(src, inter_dist_pub):
             x = dashed_points[:, 0]
             y = dashed_points[:, 1]
 
-            # 使用多項式擬合-1次多項式
-            z = np.polyfit(x, y, 1)
+            # 使用多項式擬合-2次多項式
+            z = np.polyfit(x, y, 2)
             p = np.poly1d(z)
 
             # 控制弧線長度
@@ -160,15 +160,16 @@ def detect_curved_lane(src, inter_dist_pub):
 
             for segment in dashed_lines:
                 (x1, y1), (x2, y2) = segment
-                cv2.line(gaussian, (x1, y1), (x2, y2), (0, 255, 0), 1)
+                cv2.line(gaussian, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
                 dist = dist_from_bottom_center(x1, y1, 640, 480)
                 inter_dist_pub.publish(Float32(dist))
-                print(f"bottom center: {dist}")
+                #print(f"bottom center: {dist}")
 
             # 繪製弧線
             for i in range(len(x_new) - 1):
                 cv2.line(gaussian, (int(x_new[i]), int(y_new[i])), (int(x_new[i + 1]), int(y_new[i + 1])), (0, 0, 255), 3)
+                cv2.putText(gaussian, str(dist), (100, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
             #cv2.putText(gaussian, 'Curved Lane', (int(x_new[0]), int(y_new[0]) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
             return gaussian, True
         else:
@@ -193,29 +194,27 @@ class CameraReaderNode(DTROS):
         # bridge between OpenCV and ROS
         self._bridge = CvBridge()
 
-        self._window_left = "Left ROI"
-        self._window_right = "Right ROI"
-        self._window_curved = "Curved Line"
+        self._window_left = "[TURN] Left ROI"
+        self._window_right = "[TURN] Right ROI"
+        self._window_curved = "[TURN] Curved Line"
 
         # construct subscriber
         self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
 
-        #publisher angle
-        self.angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/angles", Float32, queue_size=10)
+        #publisher angle 可能不需要
+        self.angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/angles", Float32, queue_size=10)
 
         #publisher 距離左/右側路口的距離
-        self.right_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/right_dist", Float32, queue_size=10)
-        self.left_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/left_dist", Float32, queue_size=10)
+        self.right_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/right_dist", Float32, queue_size=10)
+        self.left_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/left_dist", Float32, queue_size=10)
 
         #publisher 距離路口虛線的距離
-        self.inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/inter_dist", Float32, queue_size=10)
+        self.inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/inter_dist", Float32, queue_size=10)
 
         #publisher straight status
-        self.straight_status_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/straight_status", String, queue_size=10)
+        self.straight_status_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/straight_status", String, queue_size=10)
         
-        #publisher offset
-        self.offset_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node/offset", Float32, queue_size=10)
-        
+     
         # 定義左右平行四邊形區域 ROI 寬640 高480
         self.left_roi_points = np.array([[100, 240], [200, 240], [200, 480], [100, 480]], np.int32).reshape((-1, 1, 2))
         self.right_roi_points = np.array([[450, 240], [550, 240], [550, 480], [450, 480]], np.int32).reshape((-1, 1, 2))
@@ -259,7 +258,7 @@ class CameraReaderNode(DTROS):
                             detected_right_angle = True
                             cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 0, 255), 2)
                             cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 0, 255), 2)
-                            print(f"Detected right angle at intersection: {intersection}, angle: {angle}")
+                            #print(f"Detected right angle at intersection: {intersection}, angle: {angle}")
                         else:
                             cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 255, 0), 2)
                             cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 255, 0), 2)
@@ -313,7 +312,7 @@ class CameraReaderNode(DTROS):
         # 發布目前狀態
         status_message = f"{self.state},{self.turn_direction}"
         self.straight_status_pub.publish(status_message)
-        print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
+        #print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
 
         height, width = image.shape[:2]
         '''
@@ -362,7 +361,7 @@ class CameraReaderNode(DTROS):
 if __name__ == '__main__':
     try:
         # create the node
-        node = CameraReaderNode(node_name='camera_reader_node')
+        node = CameraReaderNode(node_name='camera_node_turn')
         # keep spinning
         rospy.spin()
     except rospy.ROSInterruptException:
