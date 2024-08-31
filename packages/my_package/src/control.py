@@ -25,6 +25,7 @@ def publish_commands(commands, publisher):
     while i < len(commands):
         command = commands[i]
 
+        # 1:forward
         if command == '1':
             rospy.loginfo(f"Publishing command: {command} in loop")
             publisher.publish(command)
@@ -52,8 +53,9 @@ def publish_commands(commands, publisher):
 
             i += 1
             continue  # Continue to the next command if the inner loop was not broken
-
-        elif command in ['0', '2', '3']:
+        
+        # 0:stop 2:left 3:right 
+        elif command in ['0', '2', '3', '4', '5']:
             rospy.loginfo(f"Publishing command: {command} once")
             publisher.publish(command)
             rospy.sleep(3.0)

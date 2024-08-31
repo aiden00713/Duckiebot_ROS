@@ -109,6 +109,10 @@ class WheelControlNode(DTROS):
             self.turn_left()
         elif command == "3":
             self.turn_right()
+        elif command == "4":
+            self.change_lanes_left()
+        elif command == "5":
+            self.change_lanes_right()
         else:
             rospy.logwarn(f"Unknown command received: {command}")
 
@@ -154,6 +158,25 @@ class WheelControlNode(DTROS):
         self.turning = True  # 開始轉彎，設置轉彎標誌
         rospy.Timer(rospy.Duration(4), self.stop, oneshot=True)
         rospy.loginfo("Turning right")
+
+    def change_lanes_left(self):
+        # 先向左
+        message = Twist2DStamped(v = 0.19, omega = 1.0)
+        self.publisher.publish(message)
+        rospy.sleep(0.5)
+        # 再向右回正
+        message = Twist2DStamped(v = 0.19, omega = -1.0)
+        self.publisher.publish(message)
+
+    def change_lanes_right(self):
+        # 先向右
+        message = Twist2DStamped(v = 0.19, omega = -1.0)
+        self.publisher.publish(message)
+        rospy.sleep(0.5)
+        # 再向左回正
+        message = Twist2DStamped(v = 0.19, omega = 1.0)
+        self.publisher.publish(message)
+
 
     def forward(self):
         smoothed_offset = self.calculate_smoothed_value(self.offset_window)
