@@ -46,7 +46,7 @@ class WheelControlNode(DTROS):
         self._offset_topic = f"/{self._vehicle_name}/camera_node_straight/offset"
 
         self._straight_status_topic = f"/{self._vehicle_name}/camera_node_turn/straight_status"
-        self._inter_distance_topic = f"/{self._vehicle_name}/camera_node_turn/inter_dist"
+        self._inter_distance_topic = f"/{self._vehicle_name}/camera_node_turn/inter_dist" #距離路口虛線的距離
         self._right_roi_distance_topic = f"/{self._vehicle_name}/camera_node_turn/right_dist"
         self._left_roi_distance_topic = f"/{self._vehicle_name}/camera_node_turn/left_dist"
 
@@ -73,6 +73,11 @@ class WheelControlNode(DTROS):
         self._angle = 0
         self.turning = False  # 初始化轉彎標誌變量
 
+        # 初始化 PID 控制器
+        self.offset_pid = PIDController(kp=0.06, ki=0, kd=0.01)
+        self.angle_pid = PIDController(kp=0.06, ki=0, kd=0.01)
+
+
         # 初始化時間變量
         self.last_time = rospy.get_time()
 
@@ -93,7 +98,7 @@ class WheelControlNode(DTROS):
         for command in command_sequence:
             rospy.loginfo(f"Executing command: {command}")
             self.execute_command(command)
-            rospy.sleep(1)
+            #rospy.sleep(1)
 
     def execute_command(self, command):
         if command == "0":
@@ -116,11 +121,11 @@ class WheelControlNode(DTROS):
 
     def offset_callback(self, msg):
         self._offset = msg.data
-        rospy.loginfo(f"Received offset: {self._offset}")
+        #rospy.loginfo(f"Received offset: {self._offset}")
 
     def angle_callback(self, msg):
         self._angle = msg.data
-        rospy.loginfo(f"Received angle: {self._angle}")
+        #rospy.loginfo(f"Received angle: {self._angle}")
 
     def limit_speed(self, speed):
         """將速度限制在設置的範圍內。"""
@@ -154,10 +159,19 @@ class WheelControlNode(DTROS):
         smoothed_offset = self.calculate_smoothed_value(self.offset_window)
         smoothed_angle = self.calculate_smoothed_value(self.angle_window)
         print(f"smoothed_offset: {smoothed_offset} , smoothed_angle: {smoothed_angle}")
-        adjustment = self.calculate_combined_adjustment(smoothed_offset, smoothed_angle)
+        
+        #adjustment = self.calculate_combined_adjustment(smoothed_offset, smoothed_angle)
+
+        # 使用 PID 控制器計算偏移量和角度的調整值
+        offset_adjustment = self.offset_pid.compute(setpoint=0, measurement=smoothed_offset)
+        angle_adjustment = self.angle_pid.compute(setpoint=0, measurement=smoothed_angle)
+
+        # 結合兩者的調整值來計算最終的 omega
+        adjustment = offset_adjustment + angle_adjustment
+
 
         #message = WheelsCmdStamped(vel_left = left, vel_right = right)
-        message = Twist2DStamped(v = 0.2, omega = adjustment)
+        message = Twist2DStamped(v = 0.09, omega = adjustment)
 
         print(f"Twist2D omega: {adjustment}")
 
@@ -165,7 +179,7 @@ class WheelControlNode(DTROS):
         rospy.loginfo("Moving forward")
         self.turning = False
 
-    def stop(self):
+    def stop(self, event=None):
         message = Twist2DStamped(v=0, omega=0)
         self.publisher.publish(message)
         rospy.loginfo("Stopped the robot")
@@ -236,8 +250,8 @@ class WheelControlNode(DTROS):
 
     def calculate_combined_adjustment(self, offset, angle):
         """根據偏移量和角度計算調整值"""
-        offset_adjustment = offset * 0.0001  # 偏移量調整係數
-        angle_adjustment = angle * 0.01  # 角度調整係數
+        offset_adjustment = offset * 0.0005  # 偏移量調整係數
+        angle_adjustment = angle * 0.008  # 角度調整係數
         combined_adjustment = offset_adjustment + angle_adjustment
         combined_adjustment = max(-0.5, min(0.5, combined_adjustment))  # 限制調整值的範圍
         #rospy.loginfo(f"Calculated combined adjustment: {combined_adjustment} (offset: {offset_adjustment}, angle: {angle_adjustment})")
@@ -270,6 +284,38 @@ class WheelControlNode(DTROS):
             self.inter_distance_subscriber.unregister()
         if hasattr(self, 'right_roi_distance_subscriber'):
             self.right_roi_distance_subscriber.unregister()
+
+
+class PIDController:
+    def __init__(self, kp, ki, kd):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.previous_error = 0
+        self.integral = 0
+
+    def compute(self, setpoint, measurement):
+        # Calculate error
+        error = setpoint - measurement
+
+        # Proportional term
+        proportional = self.kp * error
+
+        # Integral term
+        self.integral += error
+        integral = self.ki * self.integral
+
+        # Derivative term
+        derivative = self.kd * (error - self.previous_error)
+
+        # Compute the output
+        output = proportional + integral + derivative
+
+        # Save error for next derivative calculation
+        self.previous_error = error
+
+        return output
+
 
 if __name__ == '__main__':
     try:

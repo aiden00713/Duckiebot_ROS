@@ -95,8 +95,11 @@ def filter_lines_by_distance(lines, distance_threshold_min, distance_threshold_m
 
 # 基于灰度值过滤线段
 def filter_lines_by_intensity(image, lines, intensity_threshold):
+    intensity1 = 0
+    intensity2 = 0
     height, width = image.shape[:2]
     filtered_lines = []
+    
     for line in lines:
         x1, y1, x2, y2 = map(int, line[:4])
         # Ensure coordinates are within image bounds
@@ -182,7 +185,7 @@ class CameraReaderNode(DTROS):
         # static parameters
         self._vehicle_name = os.environ['VEHICLE_NAME']
         print(self._vehicle_name)
-        self._camera_topic = f"/{self._vehicle_name}/camera_node_straight/image/compressed"
+        self._camera_topic = f"/{self._vehicle_name}/camera_node/image/compressed"
 
         # bridge between OpenCV and ROS
         self._bridge = CvBridge()
@@ -256,7 +259,7 @@ class CameraReaderNode(DTROS):
                 elif x1 > center_x and x2 > center_x:
                     right_lines.append(line)
 
-            print(f"Left lines: {len(left_lines)}, Right lines: {len(right_lines)}")
+            #print(f"Left lines: {len(left_lines)}, Right lines: {len(right_lines)}")
 
             if left_lines:
                 left_line = np.median(left_lines, axis=0).astype(int)
@@ -305,13 +308,15 @@ class CameraReaderNode(DTROS):
         processed_image, offset, steering_angle = self.process_image(image.copy())
         self.offset_pub.publish(offset)
         self.angle_pub.publish(Float32(steering_angle))
-        print(f"Current offset: {offset}")
-        print(f"Steering angle: {steering_angle}")
+        #print(f"Current offset: {offset}")
+        #print(f"Steering angle: {steering_angle}")
 
+        '''
         # 發布目前狀態
         status_message = f"{self.state},{self.turn_direction}"
         self.straight_status_pub.publish(status_message)
         print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
+        '''
 
         # Display the processed image
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
