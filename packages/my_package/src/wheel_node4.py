@@ -161,20 +161,20 @@ class WheelControlNode(DTROS):
 
     def change_lanes_left(self):
         # 先向左
-        message = Twist2DStamped(v = 0.19, omega = 1.0)
+        message = Twist2DStamped(v = 0.19, omega = 1.5)
         self.publisher.publish(message)
-        rospy.sleep(0.5)
+        rospy.sleep(1.4)
         # 再向右回正
-        message = Twist2DStamped(v = 0.19, omega = -1.0)
+        message = Twist2DStamped(v = 0.19, omega = -1.5)
         self.publisher.publish(message)
 
     def change_lanes_right(self):
         # 先向右
-        message = Twist2DStamped(v = 0.19, omega = -1.0)
+        message = Twist2DStamped(v = 0.19, omega = -1.5)
         self.publisher.publish(message)
-        rospy.sleep(0.5)
+        rospy.sleep(1.5)
         # 再向左回正
-        message = Twist2DStamped(v = 0.19, omega = 1.0)
+        message = Twist2DStamped(v = 0.2, omega = 1.5)
         self.publisher.publish(message)
 
 

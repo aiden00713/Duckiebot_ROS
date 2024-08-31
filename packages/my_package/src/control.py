@@ -13,7 +13,7 @@ distance_threshold2 = 320
 def inter_distance_callback(msg):
     global inter_distance
     inter_distance = msg.data
-    print(f"inter distance: {inter_distance}")
+    #print(f"inter distance: {inter_distance}")
 
 
 def publish_commands(commands, publisher):
@@ -79,7 +79,7 @@ def main():
         rospy.Subscriber(f"/{vehicle_name}/camera_node_turn/inter_dist", Float32, inter_distance_callback)  # Replace with actual topic name
 
         rospy.loginfo("Getting command sequence")
-        command_sequence = rospy.get_param('~command_sequence', '01310')  # Get command sequence from parameter
+        command_sequence = rospy.get_param('~command_sequence', '050')  # Get command sequence from parameter
         publish_commands(command_sequence, command_publisher)
 
     except Exception as e:
