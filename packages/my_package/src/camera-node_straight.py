@@ -5,6 +5,7 @@ import rospy
 import os
 from pylsd2 import LineSegmentDetectionED
 from duckietown.dtros import DTROS, NodeType
+from dynamic_reconfigure.client import Client
 from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge
 from std_msgs.msg import String, Float32
@@ -190,6 +191,9 @@ class CameraReaderNode(DTROS):
         # bridge between OpenCV and ROS
         self._bridge = CvBridge()
 
+        # initialize dynamic reconfigure client to adjust shutter speed
+        self._client = Client("/camera_node")
+
         # create window
         self._window = "[STRAIGHT] Main"
 
@@ -205,6 +209,19 @@ class CameraReaderNode(DTROS):
         # 初始狀態是直線
         self.state = "IDLE"
         self.turn_direction = "NONE"
+
+    # 調整鏡頭快門速度
+    def set_shutter_speed(self, shutter_speed_value):
+        # Adjust the shutter speed (exposure time) dynamically
+        try:
+            rospy.wait_for_service("shutter_speed", timeout=5)  # 等待服務最多5秒
+            params = {"shutter_speed": shutter_speed_value}  # Shutter speed in microseconds
+            self._client.update_configuration(params)
+        except rospy.ROSException as e:
+            rospy.logerr(f"Service is not available: {e}")
+        except rospy.ServiceException as e:
+            rospy.logerr(f"Failed to call service : {e}")
+
 
     # [直線]主判斷程式
     def process_image(self, src):
@@ -327,12 +344,13 @@ if __name__ == '__main__':
     try:
         # create the node
         node = CameraReaderNode(node_name='camera_node_straight')
+        #node.set_shutter_speed(15000)
         # keep spinning
         rospy.spin()
     except rospy.ROSInterruptException:
         pass
 
 '''
-2024.08.01 拆出直線模式程式碼 尚未整合測試
+2024.09.14
 
 '''

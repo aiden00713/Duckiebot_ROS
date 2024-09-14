@@ -5,6 +5,7 @@ import rospy
 import os
 from pylsd2 import LineSegmentDetectionED
 from duckietown.dtros import DTROS, NodeType
+from scipy.interpolate import CubicSpline
 from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge
 from std_msgs.msg import String, Float32
@@ -71,39 +72,97 @@ def dist_from_bottom_center(x1, y1, width, height):
     return distance
 
 
-# [轉彎]判斷轉彎輔助線-虛線
-def is_dashed_line(points, length_min, length_max, gap_min, gap_max):
+def is_dashed_line(points, length_min, length_max, gap_min, gap_max, distance_threshold):
     """
-    判断是否为虚线。
+    判断是否为虚线，并使用三次样条曲线拟合虚线的控制点。
     如果线段之间的间隔大于gap_threshold且线段长度小于length_threshold，则认为是虚线。
     """
-    points = np.array(points)  # 将列表转换为numpy数组
+    points = np.array(points)  # 轉換成numpy陣列
 
     # 計算每個線段的長度
     lengths = np.sqrt(np.sum((points[1::2] - points[::2])**2, axis=1))
     # 計算相鄰線段的間隔
     distances = np.sqrt(np.sum(np.diff(points[::2], axis=0)**2, axis=1))
+
+    # 虛線x,y控制點陣列
+    control_points_x = []
+    control_points_y = []
     
     # 判斷是否為虛線
     dashed_lines = []
+
     for i in range(len(lengths)):
         if length_min <= lengths[i] <= length_max and (i == 0 or gap_min <= distances[i-1] <= gap_max):
             x1, y1 = points[2*i]
             x2, y2 = points[2*i+1]
-            angle = np.arctan2(abs(y2 - y1), abs(x2 - x1)) * 180 / np.pi  # 计算斜率的角度
-            #print(f"angle: {angle}")
+            angle = np.arctan2(abs(y2 - y1), abs(x2 - x1)) * 180 / np.pi  # 計算斜率的角度
 
-            # 过滤掉接近水平或接近垂直的线段
+            # 過濾掉接近水平或垂直的線段
             if 3 < angle < 15:
-                dashed_lines.append((points[2*i], points[2*i+1]))
+                # 計算線段的中心點
+                x_center_line = (x1 + x2) / 2
+                y_center_line = (y1 + y2) / 2
 
-    #print(f"Detected line lengths: {lengths}")
-    #print(f"Detected line distances: {distances}")
-    #print(f"Dashed lines: {dashed_lines}")
+                # 計算整體中心點（將每個控制點的平均值作為全局的中心點）
+                overall_x_center = np.mean([p[0] for p in points])
+                overall_y_center = np.mean([p[1] for p in points])
 
-    return len(dashed_lines) >= 4, dashed_lines
+                # 只保留距離全局中心點在合理範圍內的線段
+                dist_from_center = np.sqrt((x_center_line - overall_x_center)**2 + (y_center_line - overall_y_center)**2)
+                if dist_from_center <= distance_threshold:
+                    dashed_lines.append((points[2*i], points[2*i+1]))
+                    control_points_x.extend([x1, x2])
+                    control_points_y.extend([y1, y2])
 
+    # 如果檢測到足夠的虛線段，擬合曲線
+    if len(dashed_lines) >= 4 and len(control_points_x) > 3:
+        control_points_x = np.array(control_points_x)
+        control_points_y = np.array(control_points_y)
 
+        # 對控制點進行排序，確保 x 軸遞增
+        sorted_indices = np.argsort(control_points_x)
+        control_points_x = control_points_x[sorted_indices]
+        control_points_y = control_points_y[sorted_indices]
+
+        # 移除過於接近的點，確保樣條曲線擬合不會出錯
+        control_points_x, control_points_y = remove_close_points(control_points_x, control_points_y)
+
+        # 使用 x 轴的中间值作为基准点
+        x_center = (np.min(control_points_x) + np.max(control_points_x)) / 2
+
+        # 过滤掉距离中心点过远的点
+        filtered_x = []
+        filtered_y = []
+        for x, y in zip(control_points_x, control_points_y):
+            if abs(x - x_center) <= distance_threshold:  # 只保留接近中心的点
+                filtered_x.append(x)
+                filtered_y.append(y)
+
+        # 如果有足够的点进行拟合
+        if len(filtered_x) > 3:
+            # 擬合二次多項式曲線
+            z = np.polyfit(filtered_x, filtered_y, 2)
+            p = np.poly1d(z)
+
+            # 返回三次樣條曲線的控制點和虛線段
+            #return True, dashed_lines, control_points_x, control_points_y
+            # 返回二次曲線的擬和結果
+            return True, dashed_lines, p, control_points_x
+    
+    return False, dashed_lines, None, None
+
+# 過濾掉x軸上過於接近的點，以保證x是嚴格遞增的
+def remove_close_points(x, y, threshold=1e-6):
+    
+    filtered_x = [x[0]]
+    filtered_y = [y[0]]
+    
+    for i in range(1, len(x)):
+        if x[i] - filtered_x[-1] > threshold:  # 只保留x值之間距離足夠大的點
+            filtered_x.append(x[i])
+            filtered_y.append(y[i])
+    
+    return np.array(filtered_x), np.array(filtered_y)
 
 def detect_curved_lane(src, inter_dist_pub):
     # 檢查影像是否成功加入
@@ -132,16 +191,20 @@ def detect_curved_lane(src, inter_dist_pub):
             all_points.append((x2, y2))
             #cv2.line(gaussian, (x1, y1), (x2, y2), (0, 255, 0), 1)
         
-        # 设置参数
+        # 設置虛線檢測參數
         length_min = 10
         length_max = 40
         gap_min = 20
         gap_max = 40
+        distance_threshold = 200
 
         # 檢查是否為虛線
-        is_dashed, dashed_lines = is_dashed_line(all_points, length_min, length_max, gap_min, gap_max)
+        #is_dashed, dashed_lines, control_points_x, control_points_y = is_dashed_line(all_points, length_min, length_max, gap_min, gap_max)
+        
+        is_dashed, dashed_lines, poly_fit, control_points_x = is_dashed_line(all_points, length_min, length_max, gap_min, gap_max, distance_threshold)
         
         if is_dashed:  # 如果檢測到虛線
+            '''
             dashed_points = np.array([pt for segment in dashed_lines for pt in segment], dtype=np.int32)
             x = dashed_points[:, 0]
             y = dashed_points[:, 1]
@@ -172,6 +235,32 @@ def detect_curved_lane(src, inter_dist_pub):
                 cv2.putText(gaussian, str(dist), (100, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
             #cv2.putText(gaussian, 'Curved Lane', (int(x_new[0]), int(y_new[0]) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
             return gaussian, True
+            '''
+
+            # 使用二次多項式擬合
+            try:
+                #spline = CubicSpline(control_points_x, control_points_y)
+                x_fine = np.linspace(min(control_points_x), max(control_points_x), 100)
+                #y_fine = spline(x_fine)
+                y_fine = poly_fit(x_fine)
+
+                for segment in dashed_lines:
+                    (x1, y1), (x2, y2) = segment
+                    cv2.line(gaussian, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+                    dist = dist_from_bottom_center(x1, y1, 640, 480)
+                    inter_dist_pub.publish(Float32(dist))
+
+                # 繪製曲線
+                for i in range(len(x_fine) - 1):
+                    cv2.line(gaussian, (int(x_fine[i]), int(y_fine[i])), (int(x_fine[i + 1]), int(y_fine[i + 1])), (0, 0, 255), 3)
+
+                return gaussian, True
+            
+            except Exception as e:
+                print(f"Error in spline fitting: {e}")
+                return gaussian, False
+
         else:
             #print("No dashed line detected or not enough points for fitting.")
             return gaussian, False
