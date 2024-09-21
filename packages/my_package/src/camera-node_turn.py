@@ -5,12 +5,10 @@ import rospy
 import os
 from pylsd2 import LineSegmentDetectionED
 from duckietown.dtros import DTROS, NodeType
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, splprep, splev, PchipInterpolator
 from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge
 from std_msgs.msg import String, Float32
-import gc
-from collections import deque
 
 width = 640
 height = 480
@@ -138,6 +136,7 @@ def is_dashed_line(points, length_min, length_max, gap_min, gap_max, distance_th
                 filtered_x.append(x)
                 filtered_y.append(y)
 
+        
         # 如果有足够的点进行拟合
         if len(filtered_x) > 3:
             # 擬合二次多項式曲線
@@ -148,7 +147,9 @@ def is_dashed_line(points, length_min, length_max, gap_min, gap_max, distance_th
             #return True, dashed_lines, control_points_x, control_points_y
             # 返回二次曲線的擬和結果
             return True, dashed_lines, p, control_points_x
-    
+        
+
+
     return False, dashed_lines, None, None
 
 # 過濾掉x軸上過於接近的點，以保證x是嚴格遞增的
@@ -182,7 +183,7 @@ def detect_curved_lane(src, inter_dist_pub):
     #cv2.imshow("Canny Edges", edges)
     # EDLines
     lines = LineSegmentDetectionED(edges, min_line_len=10, line_fit_err_thres=1.4)
-
+    
     all_points = []
     if lines is not None:
         for line in lines:
@@ -268,6 +269,280 @@ def detect_curved_lane(src, inter_dist_pub):
         print("No lines detected.")
         return gaussian, False
 
+# 專門處理大轉彎虛線轉彎輔助線的影像
+def BIG_detect_curved_lane(src):
+    # 檢查影像是否成功加入
+    if src is None:
+        print("Error: Image not found or unable to load.")
+        return None, False, None, None
+
+    # Get dimensions of the image
+    height, width = src.shape[:2]
+    # Keep only the lower half of the image
+    cropped_src = src[height//2:height, :]
+    # Isolate the red channel
+    red = cropped_src[:, :, 2]
+    # Apply Gaussian blur to remove noise and shadows
+    gaussian = cv2.GaussianBlur(red, (5, 5), 0)
+    # edges detect
+    edges = cv2.Canny(gaussian, 30, 100)
+
+    # cv2.imshow("Canny Edges", edges)
+    # EDLines
+    lines = LineSegmentDetectionED(edges, min_line_len=5, line_fit_err_thres=1.0)
+    
+    left_lines = []
+    right_lines = []
+
+    height_cropped = height // 2  # 裁剪后图像的高度
+
+    if lines is not None:
+        min_length = 5    # 最小线段长度
+        max_length = 50   # 最大线段长度
+        brightness_threshold = 50  # 亮度差异阈值，根据实际情况调整
+
+        for line in lines:
+            x1, y1, x2, y2 = map(int, line[:4])
+
+            # 计算线段长度
+            length = np.hypot(x2 - x1, y2 - y1)
+
+            # 过滤过短或过长的线段
+            if length < min_length or length > max_length:
+                continue  # 跳过该线段
+
+            # 计算线段的斜率和角度
+            if x2 - x1 == 0:
+                continue  # 忽略垂直线段
+            slope = (y2 - y1) / (x2 - x1 + 1e-6)
+            angle = np.arctan(slope) * 180 / np.pi
+
+            # 根据斜率和位置过滤线段
+            if -80 < angle < -10 and x1 < width / 2 and x2 < width / 2:
+                side = 'left'
+            elif 10 < angle < 80 and x1 > width / 2 and x2 > width / 2:
+                side = 'right'
+            else:
+                continue  # 不符合左/右车道线条件
+
+            # 计算线段上的平均亮度
+            line_brightness = get_line_brightness(gaussian, x1, y1, x2, y2)
+
+            # 计算线段周围区域的平均亮度（线段延长方向的外部区域）
+            surrounding_brightness = get_surrounding_brightness(gaussian, x1, y1, x2, y2)
+
+            # 比较亮度差异
+            brightness_diff = line_brightness - surrounding_brightness
+
+            # 如果亮度差异大于阈值，认为是虚线的一部分
+            if brightness_diff > brightness_threshold:
+                if side == 'left':
+                    left_lines.append((x1, y1, x2, y2))
+                elif side == 'right':
+                    right_lines.append((x1, y1, x2, y2))
+
+    # 拟合左车道线
+    left_fit_fn = None
+    if len(left_lines) > 0:
+        left_fit_fn = fit_lane_lines(left_lines)
+        if left_fit_fn is not None:
+            # 调整 y_vals 以控制拟合线的长度
+            y_min_left = int(height_cropped * 0.2)  # 左车道线起点
+            y_max_left = height_cropped - 60        # 左车道线终点
+            y_vals_left = np.linspace(y_min_left, y_max_left, num=(y_max_left - y_min_left + 1))
+            x_vals_left = left_fit_fn(y_vals_left)
+            # 裁剪 x_vals，防止越界
+            x_vals_left = np.clip(x_vals_left, 0, width - 1)
+            pts_left = np.array([np.column_stack((x_vals_left, y_vals_left))], dtype=np.int32)
+            cv2.polylines(gaussian, [pts_left], isClosed=False, color=(255, 0, 0), thickness=5)
+
+    # 拟合右车道线
+    right_fit_fn = None
+    if len(right_lines) > 0:
+        right_fit_fn = fit_lane_lines(right_lines)
+        if right_fit_fn is not None:
+            # 调整 y_vals 以控制拟合线的长度
+            y_min_right = int(height_cropped * 0.1)  # 右车道线起点
+            y_max_right = height_cropped - 50        # 右车道线终点
+            y_vals_right = np.linspace(y_min_right, y_max_right, num=(y_max_right - y_min_right + 1))
+            x_vals_right = right_fit_fn(y_vals_right)
+            # 裁剪 x_vals，防止越界
+            x_vals_right = np.clip(x_vals_right, 0, width - 1)
+            pts_right = np.array([np.column_stack((x_vals_right, y_vals_right))], dtype=np.int32)
+            cv2.polylines(gaussian, [pts_right], isClosed=False, color=(0, 0, 255), thickness=5)
+    # 返回处理后的图像、检测状态、左车道线拟合函数、右车道线拟合函数
+    return gaussian, True, left_fit_fn, right_fit_fn
+
+def get_line_brightness(image, x1, y1, x2, y2):
+    # 计算线段上的像素坐标
+    line_length = int(np.hypot(x2 - x1, y2 - y1))
+    x_vals = np.linspace(x1, x2, line_length)
+    y_vals = np.linspace(y1, y2, line_length)
+    coords = np.vstack((x_vals, y_vals)).astype(np.int32).T
+
+    # 获取线段上的像素值
+    brightness_values = image[coords[:, 1], coords[:, 0]]
+
+    # 返回平均亮度
+    return np.mean(brightness_values)
+
+def get_surrounding_brightness(image, x1, y1, x2, y2, offset=5):
+    # 计算线段方向的垂直向量
+    dx = x2 - x1
+    dy = y2 - y1
+    line_length = np.hypot(dx, dy)
+    if line_length == 0:
+        return 0
+    dx /= line_length
+    dy /= line_length
+
+    # 垂直向量
+    nx = -dy
+    ny = dx
+
+    # 在线段延长线上，偏移一定距离，采样周围区域的亮度
+    x1_offset = int(x1 + nx * offset)
+    y1_offset = int(y1 + ny * offset)
+    x2_offset = int(x2 + nx * offset)
+    y2_offset = int(y2 + ny * offset)
+
+    # 确保坐标在图像范围内
+    x1_offset = np.clip(x1_offset, 0, image.shape[1] - 1)
+    y1_offset = np.clip(y1_offset, 0, image.shape[0] - 1)
+    x2_offset = np.clip(x2_offset, 0, image.shape[1] - 1)
+    y2_offset = np.clip(y2_offset, 0, image.shape[0] - 1)
+
+    # 计算偏移线段上的像素坐标
+    offset_length = int(np.hypot(x2_offset - x1_offset, y2_offset - y1_offset))
+    x_vals = np.linspace(x1_offset, x2_offset, offset_length)
+    y_vals = np.linspace(y1_offset, y2_offset, offset_length)
+    coords = np.vstack((x_vals, y_vals)).astype(np.int32).T
+
+    # 获取周围区域的像素值
+    brightness_values = image[coords[:, 1], coords[:, 0]]
+
+    # 返回平均亮度
+    return np.mean(brightness_values)
+
+def fit_lane_lines(lines):
+    x_coords = []
+    y_coords = []
+    for x1, y1, x2, y2 in lines:
+        x_coords.extend([x1, x2])
+        y_coords.extend([y1, y2])
+
+    '''
+    if len(x_coords) > 0:  # 至少需要4个点进行B-Spline拟合
+        try:
+            # 将坐标点转换为数组
+            x_coords = np.array(x_coords)
+            y_coords = np.array(y_coords)
+
+            # 对控制点进行排序，确保Y坐标递增
+            sorted_indices = np.argsort(y_coords)
+            x_coords = x_coords[sorted_indices]
+            y_coords = y_coords[sorted_indices]
+
+            # 使用B-Spline曲线拟合，s=0表示通过所有点 s设置得更大，拟合曲线会更加平滑
+            tck, u = splprep([y_coords, x_coords], s=10)
+
+            # 生成拟合后的B-Spline曲线点
+            u_new = np.linspace(0, 1, num=200)
+
+            # 返回拟合函数（用tck作为参数的可调用函数）和拟合的tck参数
+            def b_spline_fn(y_vals):
+                # 根据y_vals使用splev生成相应的x_vals
+                x_vals, _ = splev(np.linspace(0, 1, len(y_vals)), tck)
+                return x_vals
+            
+            return b_spline_fn
+
+        except Exception as e:
+            print(f"Error in fitting lane lines with B-Spline: {e}")
+            return None
+    else:
+        return None
+    '''
+
+    '''
+    if len(x_coords) > 0:
+        try:
+            # 使用加权3次多项式拟合
+            fit = np.polyfit(y_coords, x_coords, 3)
+            fit_fn = np.poly1d(fit)
+            return fit_fn
+        except Exception as e:
+            print(f"Error in fitting lane lines: {e}")
+            return None
+    else:
+        return None
+    '''
+
+    '''
+    if len(x_coords) > 3:
+        try:
+            # 使用三次樣條插值 CubicSpline
+            # 对 y_coords 进行递增排序，并同步排序 x_coords
+            sorted_indices = np.argsort(y_coords)
+            y_coords_sorted = np.array(y_coords)[sorted_indices]
+            x_coords_sorted = np.array(x_coords)[sorted_indices]
+            
+             # 确保 x_coords 递增（移除重复的 x_coords）
+            unique_mask = np.diff(x_coords_sorted) > 0  # 找出不同的 x 值
+            unique_mask = np.insert(unique_mask, 0, True)  # 保留第一个点
+            
+            y_coords_filtered = y_coords_sorted[unique_mask]
+            x_coords_filtered = x_coords_sorted[unique_mask]
+            
+            # 使用三次样条插值进行拟合
+            cs = CubicSpline(y_coords_filtered, x_coords_filtered)
+
+            # 返回拟合函数（可以直接调用该函数来计算 x_vals）
+            def cubic_spline_fn(y_vals):
+                return cs(y_vals)
+            
+            return cubic_spline_fn
+        except Exception as e:
+            print(f"Error in fitting lane lines: {e}")
+            return None
+    else:
+        return None
+    '''
+
+    if len(x_coords) > 3:
+        try:  #PCHIP 拟合
+            # 对 y_coords 进行递增排序，并同步排序 x_coords
+            sorted_indices = np.argsort(y_coords)
+            y_coords_sorted = np.array(y_coords)[sorted_indices]
+            x_coords_sorted = np.array(x_coords)[sorted_indices]
+            
+            # 移除相同的 x_coords 值，确保严格递增
+            unique_mask = np.diff(x_coords_sorted) > 0  # 找到递增部分
+            unique_mask = np.insert(unique_mask, 0, True)  # 保留第一个点
+            
+            y_coords_filtered = y_coords_sorted[unique_mask]
+            x_coords_filtered = x_coords_sorted[unique_mask]
+            
+            # 使用 PCHIP 进行插值拟合
+            pchip = PchipInterpolator(y_coords_filtered, x_coords_filtered)
+            
+            # 返回拟合函数
+            def pchip_fn(y_vals):
+                return pchip(y_vals)
+            
+            return pchip_fn
+
+
+        except Exception as e:
+            print(f"Error in fitting lane lines: {e}")
+            return None
+    else:
+        return None
+
+
+
+
+
 
 class CameraReaderNode(DTROS):
 
@@ -286,6 +561,7 @@ class CameraReaderNode(DTROS):
         self._window_left = "[TURN] Left ROI"
         self._window_right = "[TURN] Right ROI"
         self._window_curved = "[TURN] Curved Line"
+        self._window_curved2 = "[TURN] BIG Curved Line"
 
         # construct subscriber
         self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
@@ -419,12 +695,17 @@ class CameraReaderNode(DTROS):
         '''
         # Detect curved lane
         curved_lane_image, is_curved = detect_curved_lane(image.copy(), self.inter_dist_pub)
-
+        BIG_curved_lane_image, lanes_detected, left_fit_fn, right_fit_fn = BIG_detect_curved_lane(image.copy())
+        
+        
+        
         # Display the processed image
         cv2.namedWindow(self._window_curved, cv2.WINDOW_AUTOSIZE)
+        cv2.namedWindow(self._window_curved2, cv2.WINDOW_AUTOSIZE)
         cv2.namedWindow(self._window_left, cv2.WINDOW_AUTOSIZE)
         cv2.namedWindow(self._window_right, cv2.WINDOW_AUTOSIZE)
         cv2.imshow(self._window_curved, curved_lane_image)
+        cv2.imshow(self._window_curved2, BIG_curved_lane_image)
         cv2.imshow(self._window_left, left_processed_image)
         cv2.imshow(self._window_right, right_processed_image)
         cv2.waitKey(1)
