@@ -54,8 +54,13 @@ def publish_commands(commands, publisher):
             i += 1
             continue  # Continue to the next command if the inner loop was not broken
         
+        
         # 0:stop 2:left 3:right 
-        elif command in ['0', '2', '3', '4', '5']:
+        # 4:Change lanes to the left 5:Change lanes to the right
+        # 6:big turn left 7:big turn right
+
+
+        elif command in ['0', '2', '3', '4', '5', '6', '7']:
             rospy.loginfo(f"Publishing command: {command} once")
             publisher.publish(command)
             rospy.sleep(3.0)

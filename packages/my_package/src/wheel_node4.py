@@ -113,6 +113,10 @@ class WheelControlNode(DTROS):
             self.change_lanes_left()
         elif command == "5":
             self.change_lanes_right()
+        elif command == "6":
+            self.big_turn_left()
+        elif command == "7":
+            self.big_turn_right()
         else:
             rospy.logwarn(f"Unknown command received: {command}")
 
@@ -176,6 +180,28 @@ class WheelControlNode(DTROS):
         # 再向左回正
         message = Twist2DStamped(v = 0.2, omega = 1.5)
         self.publisher.publish(message)
+
+    def big_turn_left(self):
+        #left = 0.1 * par + (t * par) / (div + 3)
+        #right = 2.5 * par + (t * par) / div
+        #self.publish_wheel_cmd(0, TURN_SPEED)
+        #self.publish_wheel_cmd(vel_left=left, vel_right=right)
+        message = Twist2DStamped(v = 0.19, omega = 2.0)
+        self.publisher.publish(message)
+        self.turning = True  # 開始轉彎，設置轉彎標誌
+        rospy.Timer(rospy.Duration(4), self.stop, oneshot=True)
+        rospy.loginfo("Turning big left")
+
+    def big_turn_right(self):
+        
+        #left = 2.5 * par + (t * par) / div  # 计算左轮速度
+        #right = 0.1 * par + (t * par) / (div + 3)  # 计算右轮速度
+        #self.publish_wheel_cmd(vel_left=left, vel_right=right)
+        message = Twist2DStamped(v = 0.19, omega = -2.0)
+        self.publisher.publish(message)
+        self.turning = True  # 開始轉彎，設置轉彎標誌
+        rospy.Timer(rospy.Duration(4), self.stop, oneshot=True)
+        rospy.loginfo("Turning big right")
 
 
     def forward(self):
