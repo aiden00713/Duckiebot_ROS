@@ -297,79 +297,140 @@ def BIG_detect_curved_lane(src):
     height_cropped = height // 2  # 裁剪后图像的高度
 
     if lines is not None:
-        min_length = 5    # 最小线段长度
-        max_length = 50   # 最大线段长度
-        brightness_threshold = 50  # 亮度差异阈值，根据实际情况调整
+        # 第一次偵測靠近底部的線段，篩選高度靠近圖像底部的線段
+        bottom_threshold = height_cropped - 50  # 設定靠近底部的高度閾值
+        bottom_lines = [line for line in lines if min(line[1], line[3]) > bottom_threshold]
 
-        for line in lines:
-            x1, y1, x2, y2 = map(int, line[:4])
+        if len(bottom_lines) > 0:
+            # 找出線段中最小和最大的 X 和 Y 值
+            x_min = min(min(line[0], line[2]) for line in bottom_lines) - 10  # X軸擴展10個像素
+            x_max = max(max(line[0], line[2]) for line in bottom_lines) + 10  # X軸擴展10個像素
+            roi_y_min = min(min(line[1], line[3]) for line in bottom_lines) - 50  # Y軸擴展50個像素
+            roi_y_min = max(roi_y_min, 0)  # 防止越界
+            roi_y_max = height_cropped + 50  # Y軸擴展50個像素
 
-            # 计算线段长度
-            length = np.hypot(x2 - x1, y2 - y1)
+            # 確保 x_min 和 x_max 在圖像範圍內
+            x_min = max(x_min, 0)
+            x_max = min(x_max, width)
 
-            # 过滤过短或过长的线段
-            if length < min_length or length > max_length:
-                continue  # 跳过该线段
+            # 在整張圖像上畫出 ROI 區域範圍
+            cv2.rectangle(gaussian, (x_min, roi_y_min), (x_max, roi_y_max), (255, 0, 0), 2)  # 使用藍色框出ROI區域
 
-            # 计算线段的斜率和角度
-            if x2 - x1 == 0:
-                continue  # 忽略垂直线段
-            slope = (y2 - y1) / (x2 - x1 + 1e-6)
-            angle = np.arctan(slope) * 180 / np.pi
+            cropped_src_roi = cropped_src[int(roi_y_min):roi_y_max, int(x_min):int(x_max)]
 
-            # 根据斜率和位置过滤线段
-            if -80 < angle < -10 and x1 < width / 2 and x2 < width / 2:
-                side = 'left'
-            elif 10 < angle < 80 and x1 > width / 2 and x2 > width / 2:
-                side = 'right'
-            else:
-                continue  # 不符合左/右车道线条件
+            # 重新處理ROI中的影像
+            red_roi = cropped_src_roi[:, :, 2]
+            gaussian_roi = cv2.GaussianBlur(red_roi, (5, 5), 0)
+            edges_roi = cv2.Canny(gaussian_roi, 30, 100)
 
-            # 计算线段上的平均亮度
-            line_brightness = get_line_brightness(gaussian, x1, y1, x2, y2)
+            # 第二次偵測ROI區域中的線段
+            lines_roi = LineSegmentDetectionED(edges_roi, min_line_len=5, line_fit_err_thres=1.0)
 
-            # 计算线段周围区域的平均亮度（线段延长方向的外部区域）
-            surrounding_brightness = get_surrounding_brightness(gaussian, x1, y1, x2, y2)
+            # 在 gaussian 上畫出 edges_roi 偵測到的線段並進行篩選
+            if lines_roi is not None:
+                min_length = 5    # 最小線段長度
+                max_length = 50   # 最大線段長度
+                brightness_threshold = 50  # 亮度差異閥值
 
-            # 比较亮度差异
-            brightness_diff = line_brightness - surrounding_brightness
+                for line in lines_roi:
+                    x1, y1, x2, y2 = map(int, line[:4])
 
-            # 如果亮度差异大于阈值，认为是虚线的一部分
-            if brightness_diff > brightness_threshold:
-                if side == 'left':
-                    left_lines.append((x1, y1, x2, y2))
-                elif side == 'right':
-                    right_lines.append((x1, y1, x2, y2))
+                    # 將ROI區域內的座標轉換回整個圖像的座標
+                    x1_global = x1 + int(x_min)
+                    x2_global = x2 + int(x_min)
+                    y1_global = y1 + int(roi_y_min)
+                    y2_global = y2 + int(roi_y_min)
 
-    # 拟合左车道线
+                    # 在 gaussian 上畫線
+                    cv2.line(gaussian, (x1_global, y1_global), (x2_global, y2_global), (0, 255, 0), 2)  # 使用綠色畫出線段
+
+                    # 計算線段長度
+                    length = np.hypot(x2 - x1, y2 - y1)
+
+                    # 過濾過短或過長的線段
+                    if length < min_length or length > max_length:
+                        continue  # 跳過該線段
+
+                    # 計算線段的斜率和角度
+                    if x2 - x1 == 0:
+                        continue  # 忽略垂直線段
+                    slope = (y2 - y1) / (x2 - x1 + 1e-6)
+                    angle = np.arctan(slope) * 180 / np.pi
+
+                    # 根據斜率和位置過濾線段
+                    if -80 < angle < -10 and x1 < width / 2 and x2 < width / 2:
+                        side = 'left'
+                    elif 10 < angle < 80 and x1 > width / 2 and x2 > width / 2:
+                        side = 'right'
+                    else:
+                        continue  # 不符合左/右車道線條件
+
+                    # 計算線段上的平均亮度 (在 ROI 内的 gaussian)
+                    line_brightness = get_line_brightness(gaussian_roi, x1, y1, x2, y2)
+
+                    # 計算線段周圍區域的平均亮度 (在 ROI 内的 gaussian)
+                    surrounding_brightness = get_surrounding_brightness(gaussian_roi, x1, y1, x2, y2)
+
+                    # 比較亮度差異
+                    brightness_diff = line_brightness - surrounding_brightness
+
+                    # 如果亮度差異大於閥值，認為是虛線的一部份
+                    if brightness_diff > brightness_threshold:
+                        if side == 'left':
+                            left_lines.append((x1, y1_global, x2, y2_global))
+                        elif side == 'right':
+                            right_lines.append((x1, y1_global, x2, y2_global))
+
+
+    # 擬合左車道線
     left_fit_fn = None
     if len(left_lines) > 0:
+        # 擬合左車道線
         left_fit_fn = fit_lane_lines(left_lines)
         if left_fit_fn is not None:
-            # 调整 y_vals 以控制拟合线的长度
-            y_min_left = int(height_cropped * 0.2)  # 左车道线起点
-            y_max_left = height_cropped - 60        # 左车道线终点
-            y_vals_left = np.linspace(y_min_left, y_max_left, num=(y_max_left - y_min_left + 1))
-            x_vals_left = left_fit_fn(y_vals_left)
-            # 裁剪 x_vals，防止越界
-            x_vals_left = np.clip(x_vals_left, 0, width - 1)
-            pts_left = np.array([np.column_stack((x_vals_left, y_vals_left))], dtype=np.int32)
-            cv2.polylines(gaussian, [pts_left], isClosed=False, color=(255, 0, 0), thickness=5)
+            # 使用 left_lines 的 y 值範圍來動態設置 y_min 和 y_max
+            y_min_left = int(min(min(y1, y2) for (x1, y1, x2, y2) in left_lines))
+            y_max_left = int(max(max(y1, y2) for (x1, y1, x2, y2) in left_lines))
 
-    # 拟合右车道线
+            # 根據實際需求調整 y_min_left 和 y_max_left，防止越界
+            y_min_left = max(y_min_left, 0)  # 防止超出圖像上邊界
+            y_max_left = min(y_max_left + 50, height)  # 防止超出圖像下邊界
+
+            if y_max_left > y_min_left:
+                # 根據 y_min_left 和 y_max_left 調整 y_vals 的範圍
+                y_vals_left = np.linspace(y_min_left, y_max_left, num=(y_max_left - y_min_left + 1))
+                # 使用擬合函數計算對應的 x 值
+                x_vals_left = left_fit_fn(y_vals_left)
+                # 防止 x 值超出圖像寬度
+                x_vals_left = np.clip(x_vals_left, 0, width - 1)
+                # 將擬合結果轉換為點並繪製
+                pts_left = np.array([np.column_stack((x_vals_left, y_vals_left))], dtype=np.int32)
+                cv2.polylines(gaussian, [pts_left], isClosed=False, color=(255, 0, 0), thickness=5)
+
+    # 擬合右車道線
     right_fit_fn = None
     if len(right_lines) > 0:
         right_fit_fn = fit_lane_lines(right_lines)
         if right_fit_fn is not None:
-            # 调整 y_vals 以控制拟合线的长度
-            y_min_right = int(height_cropped * 0.1)  # 右车道线起点
-            y_max_right = height_cropped - 50        # 右车道线终点
-            y_vals_right = np.linspace(y_min_right, y_max_right, num=(y_max_right - y_min_right + 1))
-            x_vals_right = right_fit_fn(y_vals_right)
-            # 裁剪 x_vals，防止越界
-            x_vals_right = np.clip(x_vals_right, 0, width - 1)
-            pts_right = np.array([np.column_stack((x_vals_right, y_vals_right))], dtype=np.int32)
-            cv2.polylines(gaussian, [pts_right], isClosed=False, color=(0, 0, 255), thickness=5)
+            # 使用 right_lines 的 y 值範圍來動態設置 y_min 和 y_max
+            y_min_right = int(min(min(y1, y2) for (x1, y1, x2, y2) in right_lines))
+            y_max_right = int(max(max(y1, y2) for (x1, y1, x2, y2) in right_lines))
+
+            # 防止越界
+            y_min_right = max(y_min_right, 0)  # 防止超出圖像上邊界
+            y_max_right = min(y_max_right, height)  # 防止超出圖像下邊界
+
+            if y_max_right > y_min_right:
+                # 調整 y_vals_right 的範圍
+                y_vals_right = np.linspace(y_min_right, y_max_right, num=(y_max_right - y_min_right + 1))
+                # 使用擬合函數計算對應的 x 值
+                x_vals_right = right_fit_fn(y_vals_right)
+                # 防止 x 值超出圖像寬度
+                x_vals_right = np.clip(x_vals_right, 0, width - 1)
+                # 將擬合結果轉換為點並繪製
+                pts_right = np.array([np.column_stack((x_vals_right, y_vals_right))], dtype=np.int32)
+                cv2.polylines(gaussian, [pts_right], isClosed=False, color=(0, 0, 255), thickness=5)
+
     # 返回处理后的图像、检测状态、左车道线拟合函数、右车道线拟合函数
     return gaussian, True, left_fit_fn, right_fit_fn
 
@@ -464,11 +525,11 @@ def fit_lane_lines(lines):
         return None
     '''
 
-    '''
+    
     if len(x_coords) > 0:
         try:
-            # 使用加权3次多项式拟合
-            fit = np.polyfit(y_coords, x_coords, 3)
+            # 使用加权2次多项式拟合
+            fit = np.polyfit(y_coords, x_coords, 2)
             fit_fn = np.poly1d(fit)
             return fit_fn
         except Exception as e:
@@ -476,7 +537,7 @@ def fit_lane_lines(lines):
             return None
     else:
         return None
-    '''
+    
 
     '''
     if len(x_coords) > 3:
@@ -508,7 +569,7 @@ def fit_lane_lines(lines):
     else:
         return None
     '''
-
+    '''
     if len(x_coords) > 3:
         try:  #PCHIP 拟合
             # 对 y_coords 进行递增排序，并同步排序 x_coords
@@ -538,7 +599,7 @@ def fit_lane_lines(lines):
             return None
     else:
         return None
-
+    '''
 
 
 
