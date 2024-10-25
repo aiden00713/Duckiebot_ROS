@@ -47,14 +47,14 @@ def filter_lines_by_angle(lines, mode):
 
 # [直線]取得線段後繪製延伸線至頂部和底部並回傳兩點位置
 def extend_line(x1, y1, x2, y2, height, image):
-    if x2 == x1:  # 垂直线
+    if x2 == x1:  # 垂直線
         x_top = x1
         x_bottom = x2
         y_top = 0
         y_bottom = height
     else:
         slope = (y2 - y1) / (x2 - x1)
-        if slope == 0:  # 水平线
+        if slope == 0:  # 水平線
             x_top = x1
             x_bottom = x2
             y_top = y1
@@ -65,7 +65,7 @@ def extend_line(x1, y1, x2, y2, height, image):
             y_bottom = height
             x_bottom = int(x1 + (y_bottom - y1) / slope)
 
-    cv2.line(image, (x_top, y_top), (x_bottom, y_bottom), (255, 0, 0), 5) #藍線粗度5
+    cv2.line(image, (x_top, y_top), (x_bottom, y_bottom), (255, 0, 0), 5) # 顯示時藍線粗度5
     return (x_top, y_top, x_bottom, y_bottom)
 
 # [直線]取得兩條線段的最短距離
@@ -142,7 +142,7 @@ def calculate_steering_angle(lines):
     avg_angle = np.mean(angles)
     return avg_angle
 
-# [直線]計算橫向偏移量
+# [直線]計算橫向偏移量 不使用
 def calculate_offset(image):
         height, width = image.shape[:2]
         center_x = width / 2
@@ -182,37 +182,39 @@ def is_between_lane_lines(stop_line, left_lines, right_lines, image_width):
     stop_line_x_center = (x1 + x2) / 2
 
 
-    # 如果没有检测到左车道线，假设它在图像最左侧
+    # 如果沒有檢測到左側車道線就假設在影像最左邊
     if len(left_lines) > 0:
         left_median = np.median(np.array(left_lines), axis=0).astype(int)
-        left_x_mean = left_median[0]  # 左车道线的x坐标
+        left_x_mean = left_median[0]  # 左側車道線的x座標
     else:
-        left_x_mean = 0  # 没有左车道线，假设在最左侧
+        left_x_mean = 0  # 沒有左側車道線，假設在最左側 = 0
 
-    # 如果没有检测到右车道线，假设它在图像最右侧
+    # 如果沒有檢測到右側車道線就假設在影像最右邊
     if len(right_lines) > 0:
         right_median = np.median(np.array(right_lines), axis=0).astype(int)
-        right_x_mean = right_median[2]  # 右车道线的x坐标
+        right_x_mean = right_median[2]  # 右側車道線的x座標
     else:
-        right_x_mean = image_width  # 没有右车道线，假设在最右侧
+        right_x_mean = image_width  # 沒有左側車道線，假設在最左側 = 影像寬度
 
     #print(f"Stop line center: {stop_line_x_center}, Left line mean: {left_x_mean}, Right line mean: {right_x_mean}")
-    # 判断停止线是否位于左右车道线之间
+    # 用來判斷停止線是否位於左右車道之間
     return left_x_mean < stop_line_x_center < right_x_mean
 
 
 # 定義一個滑動窗格大小
 WINDOW_SIZE = 20
 
-# 初始化用于存储之前几帧线段数据的队列
+# 儲存之前前幾筆數據的陣列
 left_line_history = deque(maxlen=WINDOW_SIZE)
 right_line_history = deque(maxlen=WINDOW_SIZE)
 
-def smooth_lines(line_history, new_line):
-    # 将新线段加入历史记录
+def smooth_lines(line_history, new_line, weight=0.6):
+    # 加入新線段
     line_history.append(new_line)
-    # 计算历史记录中的平均值
-    return np.mean(line_history, axis=0).astype(int)
+    
+    # 使用加權平均進行平滑
+    weighted_average = np.average(line_history, axis=0, weights=[weight**i for i in range(len(line_history), 0, -1)])
+    return weighted_average.astype(int)
 
 class CameraReaderNode(DTROS):
 
@@ -251,7 +253,7 @@ class CameraReaderNode(DTROS):
         self.left_lines = []
         self.right_lines = []
 
-    # 調整鏡頭快門速度
+    # [無法使用]調整鏡頭快門速度
     def set_shutter_speed(self, shutter_speed_value):
         # Adjust the shutter speed (exposure time) dynamically
         try:
@@ -264,27 +266,33 @@ class CameraReaderNode(DTROS):
             rospy.logerr(f"Failed to call service : {e}")
 
 
+    # 單次影像預處理和線段偵測
+    def preprocess_and_detect_lines(image, min_line_len=20, line_fit_err_thres=1.4):
+        """
+        影像預處理並進行線段偵測
+        - Gaussian 模糊
+        - Canny 邊緣偵測
+        - LineSegmentDetectionED 偵測線段
+        """
+        height, width = image.shape[:2]
+        
+        # 灰度轉換，僅使用紅色通道
+        red_channel = image[height//2:height, :, 2]  # 只保留下半部的紅色通道
+        blurred = cv2.GaussianBlur(red_channel, (5, 5), 0)  # 模糊去噪
+        edges = cv2.Canny(blurred, 70, 210)  # Canny 邊緣偵測
+
+        # 線段偵測
+        lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=line_fit_err_thres)
+        
+        return lines, edges  # 返回檢測到的線段及邊緣處理後的影像
+
     # [直線]主判斷程式
     def process_image(self, src):
-        # Get dimensions of the image
-        height, width = src.shape[:2]
-        # Keep only the lower half of the image
-        cropped_src = src[height//2:height, :]
-        # Isolate the red channel
-        red = cropped_src[:, :, 2]
-        # Apply Gaussian blur to remove noise and shadows
-        gaussian = cv2.GaussianBlur(red, (5, 5), 0)
-        edges = cv2.Canny(gaussian, 70, 210)
-
-        # Debugging: Show intermediate images
-        #cv2.imshow("Red Channel", red)
-        #cv2.imshow("Gaussian Blur", gaussian)
-        #cv2.imshow("Canny Edges", edges)
-
-        # Assume LineSegmentDetectionED is a function defined elsewhere
-        lines = LineSegmentDetectionED(edges, min_line_len=20, line_fit_err_thres=1.4)
-        #lines = LineSegmentDetectionED(gaussian, min_line_len=20, line_fit_err_thres=1.4)
+        # 使用共用的影像處理和線段偵測
+        lines, processed_image = self.preprocess_and_detect_lines(src)
         
+        height, width = processed_image.shape[:2]
+
         '''
         # Debugging: Draw all detected lines before filtering
         debug_image = edges.copy()
@@ -295,22 +303,20 @@ class CameraReaderNode(DTROS):
         cv2.imshow("All Detected Lines", debug_image)
         '''
 
-
         center_x = width // 2
 
         if lines is not None and len(lines) > 0:
             # 根據角度忽略水平線
             lines = filter_lines_by_angle(lines, 0)
             # 根據影像灰值過濾線段
-            lines = filter_lines_by_intensity(gaussian, lines, 100)
+            lines = filter_lines_by_intensity(processed_image, lines, 100)
             # 根據距離閥值過濾線段 min-max
             lines = filter_lines_by_distance(lines, 100, 200)
 
-            
+            # 根據影像中間位置區分左、右線段
             for line in lines:
                 x1, y1, x2, y2 = line[:4]
-
-                cv2.line(gaussian, (x1, y1), (x2, y2), (255, 255, 255), 2)
+                cv2.line(processed_image, (x1, y1), (x2, y2), (255, 255, 255), 2)
                 if x1 < center_x and x2 < center_x:
                     self.left_lines.append(line)
                 elif x1 > center_x and x2 > center_x:
@@ -321,14 +327,14 @@ class CameraReaderNode(DTROS):
             if self.left_lines:
                 left_line = np.median(self.left_lines, axis=0).astype(int)
                 left_smoothed = smooth_lines(left_line_history, left_line)
-                left_extend = extend_line(*left_smoothed[:4], height, gaussian)
-                cv2.line(gaussian, (left_smoothed[0], left_smoothed[1]), (left_smoothed[2], left_smoothed[3]), (0, 255, 0), 2)
+                left_extend = extend_line(*left_smoothed[:4], height, processed_image)
+                cv2.line(processed_image, (left_smoothed[0], left_smoothed[1]), (left_smoothed[2], left_smoothed[3]), (0, 255, 0), 2)
 
             if self.right_lines:
                 right_line = np.median(self.right_lines, axis=0).astype(int)
                 right_smoothed = smooth_lines(right_line_history, right_line)
-                right_extend = extend_line(*right_smoothed[:4], height, gaussian)
-                cv2.line(gaussian, (right_smoothed[0], right_smoothed[1]), (right_smoothed[2], right_smoothed[3]), (0, 255, 0), 2)
+                right_extend = extend_line(*right_smoothed[:4], height, processed_image)
+                cv2.line(processed_image, (right_smoothed[0], right_smoothed[1]), (right_smoothed[2], right_smoothed[3]), (0, 255, 0), 2)
 
             '''
             # Output the distances for debugging
@@ -356,40 +362,29 @@ class CameraReaderNode(DTROS):
         # Calculate steering angle
         steering_angle = calculate_steering_angle(lines)
 
-        cv2.line(gaussian, (center_x, 0), (center_x, height), (0, 255, 0), 2)    
-        return gaussian, offset, steering_angle
+        cv2.line(processed_image, (center_x, 0), (center_x, height), (0, 255, 0), 2)    
+        return processed_image, offset, steering_angle
 
     # [直線]停止線判斷程式
     def detect_stop_line(self, src):
-        height, width = src.shape[:2]
-        cropped_src = src[height//2:height, :]
-        red = cropped_src[:, :, 2]
-        gaussian = cv2.GaussianBlur(red, (5, 5), 0)
-        edges = cv2.Canny(gaussian, 50, 150)
+        # 使用共用的影像處理和線段偵測
+        lines, processed_image = self.preprocess_and_detect_lines(src)
 
-        # Debugging: Show intermediate images
-        #cv2.imshow("Red Channel", red)
-        #cv2.imshow("Gaussian Blur", gaussian)
-        #cv2.imshow("Canny Edges", edges)
-
-        # Assume LineSegmentDetectionED is a function defined elsewhere
-        lines = LineSegmentDetectionED(edges, min_line_len=20, line_fit_err_thres=1.4)
-
-        
-        debug_image = red.copy()
+        '''
+        debug_image = processed_image.copy()
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = map(int, line[:4])
                 cv2.line(debug_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
         cv2.imshow("Initial Detected Lines", debug_image)
-        
+        '''
 
          # 如果檢測到線段，則進行過濾
         if lines is not None and len(lines) > 0:
             # 根據角度水平線
             lines = filter_lines_by_angle(lines, 1)
             # 根據影像灰度值過濾線段
-            lines = filter_lines_by_intensity(gaussian, lines, 100)
+            lines = filter_lines_by_intensity(processed_image, lines, 100)
             # 根據距離閥值過濾線段 (最小50像素，最大100像素)
             lines = filter_lines_by_distance(lines, 30, 150)
 
@@ -406,13 +401,13 @@ class CameraReaderNode(DTROS):
             max_distance = 50  # 設定最大距離
 
             for line in filtered_stop_lines:
-                current_distance = max_distance + 1  # 初始设置为大于min_distance
+                current_distance = max_distance + 1  # 初始設置為大於 min_distance
                 
                 if not final_stop_lines:
                     final_stop_lines.append(line)
                     continue
 
-                # 检查当前线段与已添加线段的距离
+                # 檢查目前線段與已新增線段的距離
                 for added_line in final_stop_lines:
                     distance = calculate_line_distance(line, added_line)
                     print(f"Distance between lines: {distance}")
@@ -420,7 +415,7 @@ class CameraReaderNode(DTROS):
                     if distance < current_distance:
                         current_distance = distance
                 
-                # 只有当当前线段与所有已添加线段的距离都小于min_distance时才添加
+                # 只有當前線段與所有已新增線段的距離都小於min_distance時才新增
                 if current_distance <= max_distance:
                     final_stop_lines.append(line)
 
@@ -429,9 +424,9 @@ class CameraReaderNode(DTROS):
             for line in final_stop_lines:
                 x1, y1, x2, y2 = line[:4]
                 #print(f"Filtered stop line: {line}")
-                cv2.line(gaussian, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                cv2.line(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 3)
         
-        return gaussian
+        return processed_image
 
 
 
@@ -439,7 +434,7 @@ class CameraReaderNode(DTROS):
         # convert JPEG bytes to CV image
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
         processed_image, offset, steering_angle = self.process_image(image.copy())
-        self.offset_pub.publish(offset)
+        self.offset_pub.publish(Float32(offset))
         self.angle_pub.publish(Float32(steering_angle))
         #print(f"Current offset: {offset}")
         #print(f"Steering angle: {steering_angle}")
@@ -469,6 +464,6 @@ if __name__ == '__main__':
         pass
 
 '''
-2024.09.14
+2024.10.25
 
 '''
