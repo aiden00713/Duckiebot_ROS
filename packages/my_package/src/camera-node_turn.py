@@ -10,6 +10,7 @@ from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge
 from std_msgs.msg import String, Float32
 
+# duckiebot IMX219鏡頭解析度
 width = 640
 height = 480
 
@@ -72,8 +73,8 @@ def dist_from_bottom_center(x1, y1, width, height):
 
 def is_dashed_line(points, length_min, length_max, gap_min, gap_max, distance_threshold):
     """
-    判断是否为虚线，并使用三次样条曲线拟合虚线的控制点。
-    如果线段之间的间隔大于gap_threshold且线段长度小于length_threshold，则认为是虚线。
+    判斷是否為虛線，並使用二次多項式曲線擬合虛線的控制點。
+    如果線段之間的間隔大於gap_threshold且線段長度小於length_threshold，則認為是虛線。
     """
     points = np.array(points)  # 轉換成numpy陣列
 
@@ -105,7 +106,7 @@ def is_dashed_line(points, length_min, length_max, gap_min, gap_max, distance_th
                 overall_x_center = np.mean([p[0] for p in points])
                 overall_y_center = np.mean([p[1] for p in points])
 
-                # 只保留距離全局中心點在合理範圍內的線段
+                # 只保留距離global中心點在合理範圍內的線段
                 dist_from_center = np.sqrt((x_center_line - overall_x_center)**2 + (y_center_line - overall_y_center)**2)
                 if dist_from_center <= distance_threshold:
                     dashed_lines.append((points[2*i], points[2*i+1]))
@@ -122,22 +123,22 @@ def is_dashed_line(points, length_min, length_max, gap_min, gap_max, distance_th
         control_points_x = control_points_x[sorted_indices]
         control_points_y = control_points_y[sorted_indices]
 
-        # 移除過於接近的點，確保樣條曲線擬合不會出錯
+        # 移除過於接近的點，確保曲線擬合不會出錯
         control_points_x, control_points_y = remove_close_points(control_points_x, control_points_y)
 
-        # 使用 x 轴的中间值作为基准点
+        # 使用x軸的中間值作為基準點
         x_center = (np.min(control_points_x) + np.max(control_points_x)) / 2
 
-        # 过滤掉距离中心点过远的点
+        # 過濾距離中心點過遠的點
         filtered_x = []
         filtered_y = []
         for x, y in zip(control_points_x, control_points_y):
-            if abs(x - x_center) <= distance_threshold:  # 只保留接近中心的点
+            if abs(x - x_center) <= distance_threshold:  # 只保留接近中心的點
                 filtered_x.append(x)
                 filtered_y.append(y)
 
         
-        # 如果有足够的点进行拟合
+        # 如果有足够的点进行拟合 如果有足夠的點進行擬合
         if len(filtered_x) > 3:
             # 擬合二次多項式曲線
             z = np.polyfit(filtered_x, filtered_y, 2)
@@ -165,24 +166,36 @@ def remove_close_points(x, y, threshold=1e-6):
     
     return np.array(filtered_x), np.array(filtered_y)
 
+
+# 單次影像預處理和線段偵測
+def preprocess_and_detect_lines(image, min_line_len, line_fit_err_thres=1.4):
+    """
+    影像預處理並進行線段偵測
+    - Gaussian 模糊
+    - Canny 邊緣偵測
+    - LineSegmentDetectionED 偵測線段
+    """
+    height, width = image.shape[:2]
+    
+    # 灰度轉換，僅使用紅色通道
+    red_channel = image[height//2:height, :, 2]  # 只保留下半部的紅色通道
+    blurred = cv2.GaussianBlur(red_channel, (5, 5), 0)  # 模糊去噪
+    edges = cv2.Canny(blurred, 70, 210)  # Canny 邊緣偵測
+
+    # 線段偵測
+    lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=line_fit_err_thres)
+    
+    return lines, edges  # 返回檢測到的線段及邊緣處理後的影像
+
+
 def detect_curved_lane(src, inter_dist_pub):
     # 檢查影像是否成功加入
     if src is None:
         print("Error: Image not found or unable to load.")
         return None, False
-
-    # Get dimensions of the image
-    height, width = src.shape[:2]
-    # Keep only the lower half of the image
-    cropped_src = src[height//2:height, :]
-    # Isolate the red channel
-    red = cropped_src[:, :, 2]
-    # Apply Gaussian blur to remove noise and shadows
-    gaussian = cv2.GaussianBlur(red, (5, 5), 0)
-    edges = cv2.Canny(gaussian, 50, 150)
-    #cv2.imshow("Canny Edges", edges)
-    # EDLines
-    lines = LineSegmentDetectionED(edges, min_line_len=10, line_fit_err_thres=1.4)
+    
+    lines, processed_image = preprocess_and_detect_lines(src, 10)
+   
     
     all_points = []
     if lines is not None:
@@ -190,7 +203,7 @@ def detect_curved_lane(src, inter_dist_pub):
             x1, y1, x2, y2 = map(int, line[:4])
             all_points.append((x1, y1))
             all_points.append((x2, y2))
-            #cv2.line(gaussian, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            #cv2.line(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 1)
         
         # 設置虛線檢測參數
         length_min = 10
@@ -247,27 +260,27 @@ def detect_curved_lane(src, inter_dist_pub):
 
                 for segment in dashed_lines:
                     (x1, y1), (x2, y2) = segment
-                    cv2.line(gaussian, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    cv2.line(processed_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
                     dist = dist_from_bottom_center(x1, y1, 640, 480)
                     inter_dist_pub.publish(Float32(dist))
 
                 # 繪製曲線
                 for i in range(len(x_fine) - 1):
-                    cv2.line(gaussian, (int(x_fine[i]), int(y_fine[i])), (int(x_fine[i + 1]), int(y_fine[i + 1])), (0, 0, 255), 3)
+                    cv2.line(processed_image, (int(x_fine[i]), int(y_fine[i])), (int(x_fine[i + 1]), int(y_fine[i + 1])), (0, 0, 255), 3)
 
-                return gaussian, True
+                return processed_image, True
             
             except Exception as e:
                 print(f"Error in spline fitting: {e}")
-                return gaussian, False
+                return processed_image, False
 
         else:
             #print("No dashed line detected or not enough points for fitting.")
-            return gaussian, False
+            return processed_image, False
     else:
         print("No lines detected.")
-        return gaussian, False
+        return processed_image, False
 
 # 專門處理大轉彎虛線轉彎輔助線的影像
 def BIG_detect_curved_lane(src):
@@ -276,25 +289,14 @@ def BIG_detect_curved_lane(src):
         print("Error: Image not found or unable to load.")
         return None, False, None, None
 
-    # Get dimensions of the image
+    # 提前定義裁剪後的影像部分
     height, width = src.shape[:2]
-    # Keep only the lower half of the image
-    cropped_src = src[height//2:height, :]
-    # Isolate the red channel
-    red = cropped_src[:, :, 2]
-    # Apply Gaussian blur to remove noise and shadows
-    gaussian = cv2.GaussianBlur(red, (5, 5), 0)
-    # edges detect
-    edges = cv2.Canny(gaussian, 30, 100)
-
-    # cv2.imshow("Canny Edges", edges)
-    # EDLines
-    lines = LineSegmentDetectionED(edges, min_line_len=5, line_fit_err_thres=1.0)
+    height_cropped = height // 2  # 剪裁後的影像高度
+    cropped_src = src[height_cropped:height, :]
+    lines, processed_image = preprocess_and_detect_lines(src, 5)
     
     left_lines = []
     right_lines = []
-
-    height_cropped = height // 2  # 裁剪后图像的高度
 
     if lines is not None:
         # 第一次偵測靠近底部的線段，篩選高度靠近圖像底部的線段
@@ -313,8 +315,8 @@ def BIG_detect_curved_lane(src):
             x_min = max(x_min, 0)
             x_max = min(x_max, width)
 
-            # 在整張圖像上畫出 ROI 區域範圍
-            cv2.rectangle(gaussian, (x_min, roi_y_min), (x_max, roi_y_max), (255, 0, 0), 2)  # 使用藍色框出ROI區域
+            # 在整張影像上畫出 ROI 區域範圍
+            cv2.rectangle(processed_image, (x_min, roi_y_min), (x_max, roi_y_max), (255, 0, 0), 2)  # 使用藍色框出ROI區域
 
             cropped_src_roi = cropped_src[int(roi_y_min):roi_y_max, int(x_min):int(x_max)]
 
@@ -342,7 +344,7 @@ def BIG_detect_curved_lane(src):
                     y2_global = y2 + int(roi_y_min)
 
                     # 在 gaussian 上畫線
-                    cv2.line(gaussian, (x1_global, y1_global), (x2_global, y2_global), (0, 255, 0), 2)  # 使用綠色畫出線段
+                    cv2.line(processed_image, (x1_global, y1_global), (x2_global, y2_global), (0, 255, 0), 2)  # 使用綠色畫出線段
 
                     # 計算線段長度
                     length = np.hypot(x2 - x1, y2 - y1)
@@ -405,7 +407,7 @@ def BIG_detect_curved_lane(src):
                 x_vals_left = np.clip(x_vals_left, 0, width - 1)
                 # 將擬合結果轉換為點並繪製
                 pts_left = np.array([np.column_stack((x_vals_left, y_vals_left))], dtype=np.int32)
-                cv2.polylines(gaussian, [pts_left], isClosed=False, color=(255, 0, 0), thickness=5)
+                cv2.polylines(processed_image, [pts_left], isClosed=False, color=(255, 0, 0), thickness=5)
 
     # 擬合右車道線
     right_fit_fn = None
@@ -429,26 +431,26 @@ def BIG_detect_curved_lane(src):
                 x_vals_right = np.clip(x_vals_right, 0, width - 1)
                 # 將擬合結果轉換為點並繪製
                 pts_right = np.array([np.column_stack((x_vals_right, y_vals_right))], dtype=np.int32)
-                cv2.polylines(gaussian, [pts_right], isClosed=False, color=(0, 0, 255), thickness=5)
+                cv2.polylines(processed_image, [pts_right], isClosed=False, color=(0, 0, 255), thickness=5)
 
-    # 返回处理后的图像、检测状态、左车道线拟合函数、右车道线拟合函数
-    return gaussian, True, left_fit_fn, right_fit_fn
+    # 回傳處理後的影像、檢測狀態、左右車道線擬合函數
+    return processed_image, True, left_fit_fn, right_fit_fn
 
 def get_line_brightness(image, x1, y1, x2, y2):
-    # 计算线段上的像素坐标
+    # 計算線段上的像素座標
     line_length = int(np.hypot(x2 - x1, y2 - y1))
     x_vals = np.linspace(x1, x2, line_length)
     y_vals = np.linspace(y1, y2, line_length)
     coords = np.vstack((x_vals, y_vals)).astype(np.int32).T
 
-    # 获取线段上的像素值
+    # 取得線段上的像素值
     brightness_values = image[coords[:, 1], coords[:, 0]]
 
-    # 返回平均亮度
+    # 回傳平均亮度
     return np.mean(brightness_values)
 
 def get_surrounding_brightness(image, x1, y1, x2, y2, offset=5):
-    # 计算线段方向的垂直向量
+    # 計算線段的垂直向量
     dx = x2 - x1
     dy = y2 - y1
     line_length = np.hypot(dx, dy)
@@ -461,28 +463,28 @@ def get_surrounding_brightness(image, x1, y1, x2, y2, offset=5):
     nx = -dy
     ny = dx
 
-    # 在线段延长线上，偏移一定距离，采样周围区域的亮度
+    # 在線段延長線上，偏移一定距離，採樣周圍區域的亮度
     x1_offset = int(x1 + nx * offset)
     y1_offset = int(y1 + ny * offset)
     x2_offset = int(x2 + nx * offset)
     y2_offset = int(y2 + ny * offset)
 
-    # 确保坐标在图像范围内
+    # 確保座標在影像範圍內
     x1_offset = np.clip(x1_offset, 0, image.shape[1] - 1)
     y1_offset = np.clip(y1_offset, 0, image.shape[0] - 1)
     x2_offset = np.clip(x2_offset, 0, image.shape[1] - 1)
     y2_offset = np.clip(y2_offset, 0, image.shape[0] - 1)
 
-    # 计算偏移线段上的像素坐标
+    # 計算偏移線段上的像素點座標
     offset_length = int(np.hypot(x2_offset - x1_offset, y2_offset - y1_offset))
     x_vals = np.linspace(x1_offset, x2_offset, offset_length)
     y_vals = np.linspace(y1_offset, y2_offset, offset_length)
     coords = np.vstack((x_vals, y_vals)).astype(np.int32).T
 
-    # 获取周围区域的像素值
+    # 取得周圍區域的像素值
     brightness_values = image[coords[:, 1], coords[:, 0]]
 
-    # 返回平均亮度
+    # 回傳平均亮度
     return np.mean(brightness_values)
 
 def fit_lane_lines(lines):
@@ -528,7 +530,7 @@ def fit_lane_lines(lines):
     
     if len(x_coords) > 0:
         try:
-            # 使用加权2次多项式拟合
+            # 使用二次多項式擬合
             fit = np.polyfit(y_coords, x_coords, 2)
             fit_fn = np.poly1d(fit)
             return fit_fn
@@ -601,10 +603,6 @@ def fit_lane_lines(lines):
         return None
     '''
 
-
-
-
-
 class CameraReaderNode(DTROS):
 
     def __init__(self, node_name):
@@ -627,29 +625,18 @@ class CameraReaderNode(DTROS):
         # construct subscriber
         self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
 
-        #publisher angle 可能不需要
+        #publisher angle [可能不需要]
         self.angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/angles", Float32, queue_size=10)
-
-        #publisher 距離左/右側路口的距離
-        self.right_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/right_dist", Float32, queue_size=10)
-        self.left_inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/left_dist", Float32, queue_size=10)
 
         #publisher 距離路口虛線的距離
         self.inter_dist_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/inter_dist", Float32, queue_size=10)
-
-        #publisher straight status
-        self.straight_status_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_turn/straight_status", String, queue_size=10)
-        
      
-        # 定義左右平行四邊形區域 ROI 寬640 高480
+        # 定義左右平行四邊形ROI 寬640 高480
         self.left_roi_points = np.array([[100, 240], [200, 240], [200, 480], [100, 480]], np.int32).reshape((-1, 1, 2))
         self.right_roi_points = np.array([[450, 240], [550, 240], [550, 480], [450, 480]], np.int32).reshape((-1, 1, 2))
 
-        # 初始狀態是直線
-        self.state = "STRAIGHT"
-        self.turn_direction = "NONE"
 
-    # roi線段檢測
+    # 左、右ROI辨識路口直角 [不需要]
     def detect_lane(self, frame, roi_points, min_line_len_vertical, min_line_len_horizontal):
         rect = cv2.boundingRect(roi_points)
         x, y, w, h = rect
@@ -671,8 +658,6 @@ class CameraReaderNode(DTROS):
         horizontal_lines = LineSegmentDetectionED(edges, min_line_len=min_line_len_horizontal, line_fit_err_thres=1.4)
         
         # 判斷路口直角
-        detected_right_angle = False
-
         if vertical_lines is not None and horizontal_lines is not None:
             for v_line in vertical_lines:
                 for h_line in horizontal_lines:
@@ -681,7 +666,6 @@ class CameraReaderNode(DTROS):
                         angle = angle_between_lines(v_line, h_line)
                         #print(f"angle: {angle}")
                         if angle is not None and (60 < angle < 80):
-                            detected_right_angle = True
                             cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 0, 255), 2)
                             cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 0, 255), 2)
                             #print(f"Detected right angle at intersection: {intersection}, angle: {angle}")
@@ -689,7 +673,7 @@ class CameraReaderNode(DTROS):
                             cv2.line(warped, (v_line[0], v_line[1]), (v_line[2], v_line[3]), (0, 255, 0), 2)
                             cv2.line(warped, (h_line[0], h_line[1]), (h_line[2], h_line[3]), (0, 255, 0), 2)
                 
-        return warped, vertical_lines, horizontal_lines, detected_right_angle
+        return warped, vertical_lines, horizontal_lines
 
 
     def callback(self, msg):
@@ -699,76 +683,26 @@ class CameraReaderNode(DTROS):
         #print(f"height: {height}")
         #print(f"width: {width}")
 
-        dynamic_min_line_len_vertical = 10
-        dynamic_min_line_len_horizontal = 20
+        #dynamic_min_line_len_vertical = 10
+        #dynamic_min_line_len_horizontal = 20
         
-        right_detected_right_angle = False
-        left_detected_right_angle = False
+        #left_processed_image, left_vertical_lines, left_horizontal_lines = self.detect_lane(image.copy(), self.left_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
+        #right_processed_image, right_vertical_lines, right_horizontal_lines = self.detect_lane(image.copy(), self.right_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
 
-        left_processed_image, left_vertical_lines, left_horizontal_lines, left_detected_right_angle = self.detect_lane(image.copy(), self.left_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
-        right_processed_image, right_vertical_lines, right_horizontal_lines, right_detected_right_angle = self.detect_lane(image.copy(), self.right_roi_points, dynamic_min_line_len_vertical, dynamic_min_line_len_horizontal)
 
-        # 狀態轉換-沒有用了
-        if self.state == "STRAIGHT":
-            if right_detected_right_angle:
-                self.state = "PREPARE_TURN"
-                self.turn_direction = "RIGHT"
-                dynamic_min_line_len_vertical = 5
-                dynamic_min_line_len_horizontal = 10
-            elif left_detected_right_angle:
-                self.state = "PREPARE_TURN"
-                self.turn_direction = "LEFT"
-                dynamic_min_line_len_vertical = 5
-                dynamic_min_line_len_horizontal = 10
-        elif self.state == "PREPARE_TURN":
-            if not right_detected_right_angle and not left_detected_right_angle:
-                self.state = "TURN"
-
-            '''if self.turn_direction == "RIGHT" or self.turn_direction == "LEFT":
-                curved_lane_image, is_curved = detect_curved_lane(image.copy(), self.inter_dist_pub)
-                if is_curved:
-                    self.handle_curved_lane(curved_lane_image)
-                    '''
-        elif self.state == "TURN":
-            pass
-            '''if self.check_straight(image):
-                self.state = "STRAIGHT"
-                self.turn_direction = "NONE"'''
-
-        # 發布目前狀態
-        status_message = f"{self.state},{self.turn_direction}"
-        self.straight_status_pub.publish(status_message)
-        #print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
-
-        height, width = image.shape[:2]
-        '''
-        if right_detected_right_angle:
-            print("Detected RIGHT_ROI right angle.")
-            dist = dist_from_bottom_center(right_vertical_lines[0][0], right_vertical_lines[0][1], width, height)
-            print(f"RIGHT_ROI Intersection Distance: {dist:.2f}")
-            self.right_inter_dist_pub.publish(Float32(dist))
-
-        if left_detected_right_angle:
-            print("Detected LEFT_ROI right angle.")
-            dist = dist_from_bottom_center(left_vertical_lines[0][0], left_vertical_lines[0][1], width, height)
-            print(f"LEFT_ROI Intersection Distance: {dist:.2f}")
-            self.left_inter_dist_pub.publish(Float32(dist))
-        '''
         # Detect curved lane
         curved_lane_image, is_curved = detect_curved_lane(image.copy(), self.inter_dist_pub)
         BIG_curved_lane_image, lanes_detected, left_fit_fn, right_fit_fn = BIG_detect_curved_lane(image.copy())
         
-        
-        
         # Display the processed image
         cv2.namedWindow(self._window_curved, cv2.WINDOW_AUTOSIZE)
         cv2.namedWindow(self._window_curved2, cv2.WINDOW_AUTOSIZE)
-        cv2.namedWindow(self._window_left, cv2.WINDOW_AUTOSIZE)
-        cv2.namedWindow(self._window_right, cv2.WINDOW_AUTOSIZE)
+        #cv2.namedWindow(self._window_left, cv2.WINDOW_AUTOSIZE)
+        #cv2.namedWindow(self._window_right, cv2.WINDOW_AUTOSIZE)
         cv2.imshow(self._window_curved, curved_lane_image)
         cv2.imshow(self._window_curved2, BIG_curved_lane_image)
-        cv2.imshow(self._window_left, left_processed_image)
-        cv2.imshow(self._window_right, right_processed_image)
+        #cv2.imshow(self._window_left, left_processed_image)
+        #cv2.imshow(self._window_right, right_processed_image)
         cv2.waitKey(1)
 
     def handle_curved_lane(self, image):
