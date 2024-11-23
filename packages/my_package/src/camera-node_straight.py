@@ -108,24 +108,26 @@ def filter_lines_by_distance(lines, distance_threshold_min, distance_threshold_m
 
 # 根據灰度值過濾線段
 def filter_lines_by_intensity(image, lines, intensity_threshold):
-    intensity1 = 0
-    intensity2 = 0
+    """
+    根據灰度值過濾線段，保留灰度值低於閾值的線段
+    """
     height, width = image.shape[:2]
     filtered_lines = []
-    
+
     for line in lines:
         x1, y1, x2, y2 = map(int, line[:4])
-        # Ensure coordinates are within image bounds
+        # 確保線段的座標在圖像範圍內
         if 0 <= x1 < width and 0 <= y1 < height and 0 <= x2 < width and 0 <= y2 < height:
-            # 取得線段兩端點的灰度值
-            intensity1 = image[y1, x1]
-            intensity2 = image[y2, x2]
-            #print(f"Intensity of line endpoints: ({intensity1}, {intensity2})")
-            # 如果兩端點的灰度值都低於閥值 則保留該線段 顏色越深灰值越低
-        if intensity1 < intensity_threshold and intensity2 < intensity_threshold:
-            filtered_lines.append(line)
-    #print(f"Number of lines after intensity filtering: {len(filtered_lines)}")
+            # 獲取線段兩端點的灰度值
+            intensity1 = image[y1, x1] if image.ndim == 2 else np.mean(image[y1, x1])
+            intensity2 = image[y2, x2] if image.ndim == 2 else np.mean(image[y2, x2])
+
+            # 判斷是否保留線段（灰度值低於閾值）
+            if intensity1 < intensity_threshold and intensity2 < intensity_threshold:
+                filtered_lines.append(line)
+
     return filtered_lines
+
 
 
 # [直線]計算直線角度
@@ -236,6 +238,12 @@ class CameraReaderNode(DTROS):
         # create window
         self._window = "[STRAIGHT] Main"
         self._window2 = "[STRAIGHT] STOP LINE"
+        self._window3 = "[STRAIGHT] Yellow"
+
+        # sliding windows for shrinking line detection
+        global LINE_LENGTH_HISTORY, LINE_ANGLE_HISTORY
+        LINE_LENGTH_HISTORY = deque(maxlen=20)  # 儲存線段長度的滑動窗口
+        LINE_ANGLE_HISTORY = deque(maxlen=20)  # 儲存角度的滑動窗口
 
         # construct subscriber
         self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
@@ -267,7 +275,7 @@ class CameraReaderNode(DTROS):
 
 
     # 單次影像預處理和線段偵測
-    def preprocess_and_detect_lines(image, min_line_len=20, line_fit_err_thres=1.4):
+    def preprocess_and_detect_lines(self, image, min_line_len=20, line_fit_err_thres=1.4):
         """
         影像預處理並進行線段偵測
         - Gaussian 模糊
@@ -275,7 +283,6 @@ class CameraReaderNode(DTROS):
         - LineSegmentDetectionED 偵測線段
         """
         height, width = image.shape[:2]
-        
         # 灰度轉換，僅使用紅色通道
         red_channel = image[height//2:height, :, 2]  # 只保留下半部的紅色通道
         blurred = cv2.GaussianBlur(red_channel, (5, 5), 0)  # 模糊去噪
@@ -284,7 +291,7 @@ class CameraReaderNode(DTROS):
         # 線段偵測
         lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=line_fit_err_thres)
         
-        return lines, edges  # 返回檢測到的線段及邊緣處理後的影像
+        return lines, blurred  # 返回檢測到的線段及邊緣處理後的影像
 
     # [直線]主判斷程式
     def process_image(self, src):
@@ -367,6 +374,7 @@ class CameraReaderNode(DTROS):
 
     # [直線]停止線判斷程式
     def detect_stop_line(self, src):
+        height, width = src.shape[:2]
         # 使用共用的影像處理和線段偵測
         lines, processed_image = self.preprocess_and_detect_lines(src)
 
@@ -428,6 +436,102 @@ class CameraReaderNode(DTROS):
         
         return processed_image
 
+    # [直線]判斷黃色左轉偏心道槽化線
+    def detect_shrinking_lines(self, image):
+        """
+        偵測槽化線規律，結合線段長度縮短和角度穩定性的條件
+        - 隨車輛移動，線段長度縮短，角度保持穩定
+        - 生成動態外框，外框逐漸縮小至消失
+        """
+        global LINE_LENGTH_HISTORY, LINE_ANGLE_HISTORY
+
+        # 初始化滑動窗口
+        if "LINE_LENGTH_HISTORY" not in globals():
+            LINE_LENGTH_HISTORY = deque(maxlen=20)
+        if "LINE_ANGLE_HISTORY" not in globals():
+            LINE_ANGLE_HISTORY = deque(maxlen=20)
+
+        # 預處理並檢測線段
+        lines, processed_image = self.preprocess_and_detect_lines(image)
+        
+        # 確保 `processed_image` 是 3 通道圖像
+        if len(processed_image.shape) == 2:  # 灰階
+            processed_image = cv2.cvtColor(processed_image, cv2.COLOR_GRAY2BGR)
+        
+        height, width = processed_image.shape[:2]
+
+        current_lengths = []
+        current_angles = []
+        bounding_box = None
+
+        # 如果有檢測到線段
+        if lines is not None and len(lines) > 0:
+            # 初始化外框的邊界值
+            min_x, min_y = float('inf'), float('inf')
+            max_x, max_y = float('-inf'), float('-inf')
+
+            for line in lines:
+                x1, y1, x2, y2 = map(int, line[:4])
+                
+                # 確保線段的座標在影像範圍內
+                if not (0 <= x1 < width and 0 <= y1 < height and 0 <= x2 < width and 0 <= y2 < height):
+                    continue  # 跳過無效線段
+
+                # 計算線段長度
+                length = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+                current_lengths.append(length)
+
+                # 計算角度（以水平線為基準）
+                angle = np.degrees(np.arctan2(y2 - y1, x2 - x1)) % 180
+                current_angles.append(angle)
+
+                # 更新外框邊界
+                min_x = min(min_x, x1, x2)
+                min_y = min(min_y, y1, y2)
+                max_x = max(max_x, x1, x2)
+                max_y = max(max_y, y1, y2)
+
+            # 畫出動態外框
+            if min_x < max_x and min_y < max_y:  # 確保外框有效
+                bounding_box = (min_x, min_y, max_x, max_y)
+                cv2.rectangle(processed_image, (min_x, min_y), (max_x, max_y), (0, 255, 0), 2)  # 綠色外框
+                print(f"偵測到外框: 左上({min_x}, {min_y}), 右下({max_x}, {max_y})")
+        else:
+            print("沒有檢測到線段，外框已經消失")
+
+        # 計算當前線段的平均長度和角度
+        avg_length = np.mean(current_lengths) if len(current_lengths) > 0 else 0
+        avg_angle = np.mean(current_angles) if len(current_angles) > 0 else 0
+
+        # 更新滑動窗口
+        LINE_LENGTH_HISTORY.append(avg_length)
+        LINE_ANGLE_HISTORY.append(avg_angle)
+
+        # 判斷槽化線規律（長度縮短 + 角度穩定）
+        shrinking_detected = False
+        angle_stable = False
+
+        if len(LINE_LENGTH_HISTORY) > 5 and len(LINE_ANGLE_HISTORY) > 5:  # 至少需要5幀的歷史數據
+            # 長度是否持續減少
+            length_differences = np.diff(LINE_LENGTH_HISTORY)  # 計算相鄰幀之間的長度差異
+            if np.all(length_differences < 0):  # 所有差異均為負值（長度持續減少）
+                shrinking_detected = True
+
+            # 角度是否穩定
+            angle_std_dev = np.std(LINE_ANGLE_HISTORY)  # 計算最近幀角度的標準差
+            if angle_std_dev < 5:  # 標準差小於5度，認為角度穩定
+                angle_stable = True
+
+        # 當線段長度和外框面積完全消失時，觸發事件
+        if avg_length == 0 and bounding_box is None:
+            print("槽化線和外框完全消失！")
+
+        # 綜合判斷規律是否成立
+        if shrinking_detected and angle_stable:
+            print("檢測到槽化線規律：長度縮短且角度穩定")
+
+        return shrinking_detected and angle_stable, processed_image
+
 
 
     def callback(self, msg):
@@ -445,12 +549,16 @@ class CameraReaderNode(DTROS):
         self.straight_status_pub.publish(status_message)
         print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
         '''
+        # 處理縮小線段檢測
+        shrinking_detected, shrinking_image = self.detect_shrinking_lines(image.copy())
 
         # Display the processed image
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
         cv2.namedWindow(self._window2, cv2.WINDOW_AUTOSIZE)
+        cv2.namedWindow(self._window3, cv2.WINDOW_AUTOSIZE)
         cv2.imshow(self._window, processed_image)
         cv2.imshow(self._window2, self.detect_stop_line(image.copy()))
+        cv2.imshow(self._window3, shrinking_image)
         cv2.waitKey(1)
 
 if __name__ == '__main__':
