@@ -418,7 +418,7 @@ class CameraReaderNode(DTROS):
                 # 檢查目前線段與已新增線段的距離
                 for added_line in final_stop_lines:
                     distance = calculate_line_distance(line, added_line)
-                    print(f"Distance between lines: {distance}")
+                    #print(f"Distance between lines: {distance}")
 
                     if distance < current_distance:
                         current_distance = distance
@@ -436,101 +436,116 @@ class CameraReaderNode(DTROS):
         
         return processed_image
 
-    # [直線]判斷黃色左轉偏心道槽化線
+
     def detect_shrinking_lines(self, image):
         """
-        偵測槽化線規律，結合線段長度縮短和角度穩定性的條件
-        - 隨車輛移動，線段長度縮短，角度保持穩定
-        - 生成動態外框，外框逐漸縮小至消失
+        改進版：結合內部黑框的數量、分佈和總面積比例進行更嚴謹的槽化線判斷
         """
-        global LINE_LENGTH_HISTORY, LINE_ANGLE_HISTORY
+        height, width = image.shape[:2]
 
-        # 初始化滑動窗口
-        if "LINE_LENGTH_HISTORY" not in globals():
-            LINE_LENGTH_HISTORY = deque(maxlen=20)
-        if "LINE_ANGLE_HISTORY" not in globals():
-            LINE_ANGLE_HISTORY = deque(maxlen=20)
+        # 提取紅色通道（只保留下半部分）
+        red_channel = image[height // 2:height, :, 2]
 
-        # 預處理並檢測線段
-        lines, processed_image = self.preprocess_and_detect_lines(image)
-        
-        # 確保 `processed_image` 是 3 通道圖像
-        if len(processed_image.shape) == 2:  # 灰階
-            processed_image = cv2.cvtColor(processed_image, cv2.COLOR_GRAY2BGR)
-        
-        height, width = processed_image.shape[:2]
+        # 增強局部對比度 (CLAHE)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced_red_channel = clahe.apply(red_channel)
 
-        current_lengths = []
-        current_angles = []
-        bounding_box = None
+        # 對紅色通道進行二值化，檢測高亮區域（黃色外框）
+        _, binary = cv2.threshold(enhanced_red_channel, 160, 255, cv2.THRESH_BINARY)
 
-        # 如果有檢測到線段
-        if lines is not None and len(lines) > 0:
-            # 初始化外框的邊界值
-            min_x, min_y = float('inf'), float('inf')
-            max_x, max_y = float('-inf'), float('-inf')
+        # 反轉二值化影像，用於檢測內部的黑框
+        inverted_binary = cv2.bitwise_not(binary)
 
-            for line in lines:
-                x1, y1, x2, y2 = map(int, line[:4])
-                
-                # 確保線段的座標在影像範圍內
-                if not (0 <= x1 < width and 0 <= y1 < height and 0 <= x2 < width and 0 <= y2 < height):
-                    continue  # 跳過無效線段
+        # 形態學操作，增強輪廓結構
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        dilated = cv2.dilate(binary, kernel, iterations=2)
+        eroded = cv2.erode(dilated, kernel, iterations=1)
 
-                # 計算線段長度
-                length = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-                current_lengths.append(length)
+        # 將紅色通道轉換為彩色影像以顯示結果
+        color_red_channel = cv2.cvtColor(enhanced_red_channel, cv2.COLOR_GRAY2BGR)
 
-                # 計算角度（以水平線為基準）
-                angle = np.degrees(np.arctan2(y2 - y1, x2 - x1)) % 180
-                current_angles.append(angle)
+        # 檢測外框輪廓
+        contours, _ = cv2.findContours(eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-                # 更新外框邊界
-                min_x = min(min_x, x1, x2)
-                min_y = min(min_y, y1, y2)
-                max_x = max(max_x, x1, x2)
-                max_y = max(max_y, y1, y2)
+        detected = False
+        black_box_threshold = 3  # 黑框數量閾值
+        black_area_ratio_threshold = 0.05  # 黑框總面積比例閾值
 
-            # 畫出動態外框
-            if min_x < max_x and min_y < max_y:  # 確保外框有效
-                bounding_box = (min_x, min_y, max_x, max_y)
-                cv2.rectangle(processed_image, (min_x, min_y), (max_x, max_y), (0, 255, 0), 2)  # 綠色外框
-                print(f"偵測到外框: 左上({min_x}, {min_y}), 右下({max_x}, {max_y})")
-        else:
-            print("沒有檢測到線段，外框已經消失")
+        for contour in contours:
+            # 計算外框的面積
+            area = cv2.contourArea(contour)
+            if area < 500:  # 忽略過小的框
+                continue
 
-        # 計算當前線段的平均長度和角度
-        avg_length = np.mean(current_lengths) if len(current_lengths) > 0 else 0
-        avg_angle = np.mean(current_angles) if len(current_angles) > 0 else 0
+            # 計算邊界框
+            x, y, w, h = cv2.boundingRect(contour)
 
-        # 更新滑動窗口
-        LINE_LENGTH_HISTORY.append(avg_length)
-        LINE_ANGLE_HISTORY.append(avg_angle)
+            # 限定綠框只能出現在影像左半邊
+            if x + w > width // 2:  # 如果框的右邊界超過影像中點，忽略該框
+                continue
+            
+            # 分析內部區域的白色比例
+            roi = binary[y:y + h, x:x + w]
+            white_pixel_count = cv2.countNonZero(roi)
+            white_ratio = white_pixel_count / (w * h)
 
-        # 判斷槽化線規律（長度縮短 + 角度穩定）
-        shrinking_detected = False
-        angle_stable = False
+            # 調整白色比例的閾值
+            if white_ratio < 0.2:  # 如果白色區域占比過低，忽略該框
+                continue
 
-        if len(LINE_LENGTH_HISTORY) > 5 and len(LINE_ANGLE_HISTORY) > 5:  # 至少需要5幀的歷史數據
-            # 長度是否持續減少
-            length_differences = np.diff(LINE_LENGTH_HISTORY)  # 計算相鄰幀之間的長度差異
-            if np.all(length_differences < 0):  # 所有差異均為負值（長度持續減少）
-                shrinking_detected = True
+            # 繪製外框
+            cv2.rectangle(color_red_channel, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-            # 角度是否穩定
-            angle_std_dev = np.std(LINE_ANGLE_HISTORY)  # 計算最近幀角度的標準差
-            if angle_std_dev < 5:  # 標準差小於5度，認為角度穩定
-                angle_stable = True
+            # 檢測內部黑框
+            roi_inverted = inverted_binary[y:y + h, x:x + w]
+            inner_contours, _ = cv2.findContours(roi_inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 當線段長度和外框面積完全消失時，觸發事件
-        if avg_length == 0 and bounding_box is None:
-            print("槽化線和外框完全消失！")
+            black_box_count = 0
+            total_black_area = 0
+            black_box_centers = []
 
-        # 綜合判斷規律是否成立
-        if shrinking_detected and angle_stable:
-            print("檢測到槽化線規律：長度縮短且角度穩定")
+            for inner_contour in inner_contours:
+                inner_area = cv2.contourArea(inner_contour)
+                if 50 < inner_area < 2000:  # 放寬黑框面積的範圍
+                    black_box_count += 1
+                    total_black_area += inner_area
 
-        return shrinking_detected and angle_stable, processed_image
+                    # 計算黑框中心
+                    inner_x, inner_y, inner_w, inner_h = cv2.boundingRect(inner_contour)
+                    center_x = x + inner_x + inner_w // 2
+                    center_y = y + inner_y + inner_h // 2
+                    black_box_centers.append((center_x, center_y))
+
+                    # 繪製內部黑框
+                    cv2.rectangle(color_red_channel, (x + inner_x, y + inner_y),
+                                (x + inner_x + inner_w, y + inner_y + inner_h), (0, 0, 255), 1)
+
+            # 判斷內部黑框總面積比例
+            black_area_ratio = total_black_area / (w * h)
+
+            # 檢查黑框分佈是否集中
+            if len(black_box_centers) > 1:
+                center_distances = [
+                    np.linalg.norm(np.array(black_box_centers[i]) - np.array(black_box_centers[j]))
+                    for i in range(len(black_box_centers))
+                    for j in range(i + 1, len(black_box_centers))
+                ]
+                average_distance = np.mean(center_distances) if center_distances else 0
+            else:
+                average_distance = 0
+
+            # 綜合條件判斷
+            if (black_box_count > black_box_threshold and
+                black_area_ratio > black_area_ratio_threshold and
+                average_distance < max(w, h) / 2):  # 黑框分佈集中
+                detected = True
+                cv2.putText(color_red_channel, "Shrinking line detected", (x, y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        return detected, color_red_channel
+
+
+
 
 
 
@@ -554,10 +569,10 @@ class CameraReaderNode(DTROS):
 
         # Display the processed image
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
-        cv2.namedWindow(self._window2, cv2.WINDOW_AUTOSIZE)
+        #cv2.namedWindow(self._window2, cv2.WINDOW_AUTOSIZE)
         cv2.namedWindow(self._window3, cv2.WINDOW_AUTOSIZE)
         cv2.imshow(self._window, processed_image)
-        cv2.imshow(self._window2, self.detect_stop_line(image.copy()))
+        #cv2.imshow(self._window2, self.detect_stop_line(image.copy()))
         cv2.imshow(self._window3, shrinking_image)
         cv2.waitKey(1)
 
@@ -572,6 +587,6 @@ if __name__ == '__main__':
         pass
 
 '''
-2024.10.25
+2024.11.24
 
 '''
