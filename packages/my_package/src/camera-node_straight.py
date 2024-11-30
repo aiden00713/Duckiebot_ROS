@@ -437,21 +437,41 @@ class CameraReaderNode(DTROS):
         return processed_image
 
 
-    def detect_shrinking_lines(self, image):
+    def detect_shrinking_lines(self, image, alert):
         """
         改進版：結合內部黑框的數量、分佈和總面積比例進行更嚴謹的槽化線判斷
         """
         height, width = image.shape[:2]
 
-        # 提取紅色通道（只保留下半部分）
+        # 提取紅色與藍色通道，並計算紅色減藍色通道
         red_channel = image[height // 2:height, :, 2]
+        blue_channel = image[height // 2:height, :, 0]
+        red_minus_blue = cv2.subtract(red_channel, blue_channel)
 
         # 增強局部對比度 (CLAHE)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced_red_channel = clahe.apply(red_channel)
+        enhanced_red_channel = clahe.apply(red_minus_blue)
 
         # 對紅色通道進行二值化，檢測高亮區域（黃色外框）
         _, binary = cv2.threshold(enhanced_red_channel, 160, 255, cv2.THRESH_BINARY)
+
+        lines = self.preprocess_and_detect_lines(red_channel)
+
+        if lines is not None:
+            parallel_lines = []
+            for line in lines:
+                x1, y1, x2, y2 = map(int, line[:4])  # 提取線段起點與終點
+                slope = abs((y2 - y1) / (x2 - x1 + 1e-6))  # 避免除以零
+
+                # 判斷是否為接近平行的水平線
+                if slope < 0.1:  # 線段的斜率接近水平
+                    parallel_lines.append((x1, y1, x2, y2))
+
+            # 檢查是否存在兩條接近平行的線
+            if len(parallel_lines) >= 2:
+                alert.publish("駛離槽化線")
+                return True, binary
+
 
         # 反轉二值化影像，用於檢測內部的黑框
         inverted_binary = cv2.bitwise_not(binary)
@@ -491,6 +511,7 @@ class CameraReaderNode(DTROS):
 
             # 調整白色比例的閾值
             if white_ratio < 0.2:  # 如果白色區域占比過低，忽略該框
+                alert.publish("駛離槽化線")
                 continue
 
             # 繪製外框
@@ -546,9 +567,6 @@ class CameraReaderNode(DTROS):
 
 
 
-
-
-
     def callback(self, msg):
         # convert JPEG bytes to CV image
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
@@ -564,6 +582,7 @@ class CameraReaderNode(DTROS):
         self.straight_status_pub.publish(status_message)
         print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
         '''
+
         # 處理縮小線段檢測
         shrinking_detected, shrinking_image = self.detect_shrinking_lines(image.copy())
 
@@ -587,6 +606,6 @@ if __name__ == '__main__':
         pass
 
 '''
-2024.11.24
+2024.11.24 新增偵測槽化線
 
 '''
