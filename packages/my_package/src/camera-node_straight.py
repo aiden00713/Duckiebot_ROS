@@ -204,19 +204,26 @@ def is_between_lane_lines(stop_line, left_lines, right_lines, image_width):
 
 
 # 定義一個滑動窗格大小
-WINDOW_SIZE = 20
+WINDOW_SIZE = 10
 
 # 儲存之前前幾筆數據的陣列
 left_line_history = deque(maxlen=WINDOW_SIZE)
 right_line_history = deque(maxlen=WINDOW_SIZE)
 
-def smooth_lines(line_history, new_line, weight=0.6):
+def smooth_lines(line_history, new_line, weight=0.8):
+    # 如果歷史數據為空，直接返回新線段
+    if len(line_history) == 0:
+        line_history.append(new_line)
+        return new_line
+    
     # 加入新線段
     line_history.append(new_line)
     
     # 使用加權平均進行平滑
-    weighted_average = np.average(line_history, axis=0, weights=[weight**i for i in range(len(line_history), 0, -1)])
+    weights = [weight**i for i in range(len(line_history), 0, -1)]
+    weighted_average = np.average(line_history, axis=0, weights=weights)
     return weighted_average.astype(int)
+
 
 class CameraReaderNode(DTROS):
 
@@ -253,6 +260,9 @@ class CameraReaderNode(DTROS):
 
         #publisher offset
         self.offset_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_straight/offset", Float32, queue_size=10)
+
+        #publisher alert
+        self.alert_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_straight/alert", String, queue_size=10)
         
         # 初始狀態是直線
         self.state = "IDLE"
@@ -439,131 +449,68 @@ class CameraReaderNode(DTROS):
 
     def detect_shrinking_lines(self, image, alert):
         """
-        改進版：結合內部黑框的數量、分佈和總面積比例進行更嚴謹的槽化線判斷
+        判斷是否駛離槽化線：
+        1. 必須檢測到雙白線（左側四分之一 ROI 區域內）。
+        2. 白色比例降低僅作為輔助條件。
         """
         height, width = image.shape[:2]
 
+        # 定義左側四分之一 ROI 區域
+        roi_left_x_start = 0
+        roi_left_x_end = width // 3  # 左側影像的四分之一
+        roi = image[height // 2:height, roi_left_x_start:roi_left_x_end]  # 只取左側整體高度的四分之一寬度
+
         # 提取紅色與藍色通道，並計算紅色減藍色通道
-        red_channel = image[height // 2:height, :, 2]
-        blue_channel = image[height // 2:height, :, 0]
+        red_channel = roi[:, :, 2]
+        blue_channel = roi[:, :, 0]
         red_minus_blue = cv2.subtract(red_channel, blue_channel)
 
         # 增強局部對比度 (CLAHE)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(8, 8))
         enhanced_red_channel = clahe.apply(red_minus_blue)
 
         # 對紅色通道進行二值化，檢測高亮區域（黃色外框）
-        _, binary = cv2.threshold(enhanced_red_channel, 160, 255, cv2.THRESH_BINARY)
+        _, binary = cv2.threshold(enhanced_red_channel, 100, 255, cv2.THRESH_BINARY)
 
-        lines = self.preprocess_and_detect_lines(red_channel)
+        # 檢測左側 ROI 中的雙白線
+        lines = self.preprocess_and_detect_lines(image)  # 使用 EDLines 檢測線段
+        parallel_lines = []
 
         if lines is not None:
-            parallel_lines = []
             for line in lines:
-                x1, y1, x2, y2 = map(int, line[:4])  # 提取線段起點與終點
-                slope = abs((y2 - y1) / (x2 - x1 + 1e-6))  # 避免除以零
+                # 提取线段坐标
+                x1, y1, x2, y2 = map(lambda v: int(v[0]) if isinstance(v, np.ndarray) else int(v), line[:4])
 
-                # 判斷是否為接近平行的水平線
-                if slope < 0.1:  # 線段的斜率接近水平
-                    parallel_lines.append((x1, y1, x2, y2))
+                # 计算线段的斜率
+                try:
+                    slope = abs((y2 - y1) / (x2 - x1 + 1e-6))  # 避免除以零
+                except ZeroDivisionError:
+                    slope = float('inf')  # 垂直线
 
-            # 檢查是否存在兩條接近平行的線
-            if len(parallel_lines) >= 2:
-                alert.publish("駛離槽化線")
-                return True, binary
+                # 限制线段在左侧四分之一 ROI 区域内
+                if x1 < roi_left_x_end and x2 < roi_left_x_end:
+                    # 判断是否为接近垂直的线
+                    if slope > 5:  # 斜率较大表示接近垂直（阈值可调整）
+                        parallel_lines.append((x1, y1, x2, y2))
 
+        # 如果沒有檢測到雙白線，直接返回（未駛離槽化線）
+        if len(parallel_lines) < 2:
+            return False, binary
 
-        # 反轉二值化影像，用於檢測內部的黑框
-        inverted_binary = cv2.bitwise_not(binary)
+        # 計算左側 ROI 的白色比例
+        white_pixel_count = cv2.countNonZero(binary)
+        total_pixel_count = binary.size
+        white_ratio = white_pixel_count / total_pixel_count
 
-        # 形態學操作，增強輪廓結構
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        dilated = cv2.dilate(binary, kernel, iterations=2)
-        eroded = cv2.erode(dilated, kernel, iterations=1)
+        # 條件：檢測到雙白線，並且白色比例足夠低
+        if white_ratio < 0.2:  # 假設白色比例閾值為 20%
+            alert.publish("駛離槽化線")
+            rospy.loginfo("檢測到雙白線，且白色比例低於閾值，駛離槽化線")
+            return True, binary
 
-        # 將紅色通道轉換為彩色影像以顯示結果
-        color_red_channel = cv2.cvtColor(enhanced_red_channel, cv2.COLOR_GRAY2BGR)
-
-        # 檢測外框輪廓
-        contours, _ = cv2.findContours(eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        detected = False
-        black_box_threshold = 3  # 黑框數量閾值
-        black_area_ratio_threshold = 0.05  # 黑框總面積比例閾值
-
-        for contour in contours:
-            # 計算外框的面積
-            area = cv2.contourArea(contour)
-            if area < 500:  # 忽略過小的框
-                continue
-
-            # 計算邊界框
-            x, y, w, h = cv2.boundingRect(contour)
-
-            # 限定綠框只能出現在影像左半邊
-            if x + w > width // 2:  # 如果框的右邊界超過影像中點，忽略該框
-                continue
-            
-            # 分析內部區域的白色比例
-            roi = binary[y:y + h, x:x + w]
-            white_pixel_count = cv2.countNonZero(roi)
-            white_ratio = white_pixel_count / (w * h)
-
-            # 調整白色比例的閾值
-            if white_ratio < 0.2:  # 如果白色區域占比過低，忽略該框
-                alert.publish("駛離槽化線")
-                continue
-
-            # 繪製外框
-            cv2.rectangle(color_red_channel, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-            # 檢測內部黑框
-            roi_inverted = inverted_binary[y:y + h, x:x + w]
-            inner_contours, _ = cv2.findContours(roi_inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            black_box_count = 0
-            total_black_area = 0
-            black_box_centers = []
-
-            for inner_contour in inner_contours:
-                inner_area = cv2.contourArea(inner_contour)
-                if 50 < inner_area < 2000:  # 放寬黑框面積的範圍
-                    black_box_count += 1
-                    total_black_area += inner_area
-
-                    # 計算黑框中心
-                    inner_x, inner_y, inner_w, inner_h = cv2.boundingRect(inner_contour)
-                    center_x = x + inner_x + inner_w // 2
-                    center_y = y + inner_y + inner_h // 2
-                    black_box_centers.append((center_x, center_y))
-
-                    # 繪製內部黑框
-                    cv2.rectangle(color_red_channel, (x + inner_x, y + inner_y),
-                                (x + inner_x + inner_w, y + inner_y + inner_h), (0, 0, 255), 1)
-
-            # 判斷內部黑框總面積比例
-            black_area_ratio = total_black_area / (w * h)
-
-            # 檢查黑框分佈是否集中
-            if len(black_box_centers) > 1:
-                center_distances = [
-                    np.linalg.norm(np.array(black_box_centers[i]) - np.array(black_box_centers[j]))
-                    for i in range(len(black_box_centers))
-                    for j in range(i + 1, len(black_box_centers))
-                ]
-                average_distance = np.mean(center_distances) if center_distances else 0
-            else:
-                average_distance = 0
-
-            # 綜合條件判斷
-            if (black_box_count > black_box_threshold and
-                black_area_ratio > black_area_ratio_threshold and
-                average_distance < max(w, h) / 2):  # 黑框分佈集中
-                detected = True
-                cv2.putText(color_red_channel, "Shrinking line detected", (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-        return detected, color_red_channel
+        # 如果檢測到雙白線，但白色比例未降低，仍判斷為在槽化線內
+        rospy.loginfo("雙白線檢測成功，車輛仍在槽化線內")
+        return False, binary
 
 
 
@@ -584,7 +531,10 @@ class CameraReaderNode(DTROS):
         '''
 
         # 處理縮小線段檢測
-        shrinking_detected, shrinking_image = self.detect_shrinking_lines(image.copy())
+        shrinking_detected, shrinking_image = self.detect_shrinking_lines(image.copy(), self.alert_pub)
+
+        if shrinking_detected:
+            rospy.loginfo("車輛已駛離槽化線")
 
         # Display the processed image
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
