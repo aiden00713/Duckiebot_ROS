@@ -310,15 +310,15 @@ class CameraReaderNode(DTROS):
         
         height, width = processed_image.shape[:2]
 
-        '''
+        
         # Debugging: Draw all detected lines before filtering
-        debug_image = edges.copy()
+        debug_image = processed_image.copy()
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = map(int, line[:4])
                 cv2.line(debug_image, (x1, y1), (x2, y2), (255, 255, 255), 2)
         cv2.imshow("All Detected Lines", debug_image)
-        '''
+        
 
         center_x = width // 2
 
@@ -328,7 +328,7 @@ class CameraReaderNode(DTROS):
             # 根據影像灰值過濾線段
             lines = filter_lines_by_intensity(processed_image, lines, 100)
             # 根據距離閥值過濾線段 min-max
-            lines = filter_lines_by_distance(lines, 100, 200)
+            lines = filter_lines_by_distance(lines, 50, 200)
 
             # 根據影像中間位置區分左、右線段
             for line in lines:
@@ -466,11 +466,19 @@ class CameraReaderNode(DTROS):
         red_minus_blue = cv2.subtract(red_channel, blue_channel)
 
         # 增強局部對比度 (CLAHE)
-        clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(4, 4))
         enhanced_red_channel = clahe.apply(red_minus_blue)
 
         # 對紅色通道進行二值化，檢測高亮區域（黃色外框）
         _, binary = cv2.threshold(enhanced_red_channel, 100, 255, cv2.THRESH_BINARY)
+        
+        # **計算白色面積**
+        white_pixel_count = cv2.countNonZero(binary)  # 計算白色像素數
+        total_pixel_count = binary.size  # 總像素數
+        white_ratio = white_pixel_count / total_pixel_count  # 白色比例
+
+        # **打印白色比例**
+        print(f"白色區域比例: {white_ratio:.2%} ({white_pixel_count}/{total_pixel_count} 像素)")
 
         # 找到雙白線輪廓
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -487,13 +495,8 @@ class CameraReaderNode(DTROS):
         for rect in rectangles:
             x, y, w, h = rect
             # 在原始影像上繪製綠色矩形框表示檢測到的長條狀白色區域
-            cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.rectangle(binary, (x, y), (x + w, y + h), (0, 255, 0), 2)
         
-        # 顯示二值化的結果（Binary Mask）
-        cv2.imshow("Binary Mask", binary)
-
-        # 顯示帶檢測框的原始影像
-        cv2.imshow("Detected Rectangles", image)
 
         # 檢測長條狀白色區域的幾何關係
         for i, rect1 in enumerate(rectangles):
@@ -507,7 +510,7 @@ class CameraReaderNode(DTROS):
                 if abs(h1 - h2) < 20 and abs(x1 - x2) < 30:
                     # 檢查兩者的水平間距
                     distance = abs(y1 - y2)
-                    if 50 < distance < 200:  # 假設合理的間距範圍
+                    if 5 < distance < 30:  # 假設合理的間距範圍
                         alert.publish("駛離槽化線")
                         rospy.loginfo("雙白線（長條狀白色區域）檢測成功")
                         return True, binary
