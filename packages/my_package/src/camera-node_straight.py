@@ -472,46 +472,47 @@ class CameraReaderNode(DTROS):
         # 對紅色通道進行二值化，檢測高亮區域（黃色外框）
         _, binary = cv2.threshold(enhanced_red_channel, 100, 255, cv2.THRESH_BINARY)
 
-        # 檢測左側 ROI 中的雙白線
-        lines = self.preprocess_and_detect_lines(image)  # 使用 EDLines 檢測線段
-        parallel_lines = []
+        # 找到雙白線輪廓
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        if lines is not None:
-            for line in lines:
-                # 提取线段坐标
-                x1, y1, x2, y2 = map(lambda v: int(v[0]) if isinstance(v, np.ndarray) else int(v), line[:4])
+        rectangles = []
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            aspect_ratio = h / w if w > 0 else 0  # 計算長寬比（注意是高度/寬度）
+            if aspect_ratio > 3 and h > 50:  # 長條狀區域：長寬比 > 3 且高度足夠
+                rectangles.append((x, y, w, h))
 
-                # 计算线段的斜率
-                try:
-                    slope = abs((y2 - y1) / (x2 - x1 + 1e-6))  # 避免除以零
-                except ZeroDivisionError:
-                    slope = float('inf')  # 垂直线
 
-                # 限制线段在左侧四分之一 ROI 区域内
-                if x1 < roi_left_x_end and x2 < roi_left_x_end:
-                    # 判断是否为接近垂直的线
-                    if slope > 5:  # 斜率较大表示接近垂直（阈值可调整）
-                        parallel_lines.append((x1, y1, x2, y2))
+        # 可視化
+        for rect in rectangles:
+            x, y, w, h = rect
+            # 在原始影像上繪製綠色矩形框表示檢測到的長條狀白色區域
+            cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        
+        # 顯示二值化的結果（Binary Mask）
+        cv2.imshow("Binary Mask", binary)
 
-        # 如果沒有檢測到雙白線，直接返回（未駛離槽化線）
-        if len(parallel_lines) < 2:
-            return False, binary
+        # 顯示帶檢測框的原始影像
+        cv2.imshow("Detected Rectangles", image)
 
-        # 計算左側 ROI 的白色比例
-        white_pixel_count = cv2.countNonZero(binary)
-        total_pixel_count = binary.size
-        white_ratio = white_pixel_count / total_pixel_count
+        # 檢測長條狀白色區域的幾何關係
+        for i, rect1 in enumerate(rectangles):
+            for j, rect2 in enumerate(rectangles):
+                if i >= j:
+                    continue
+                x1, y1, w1, h1 = rect1
+                x2, y2, w2, h2 = rect2
 
-        # 條件：檢測到雙白線，並且白色比例足夠低
-        if white_ratio < 0.2:  # 假設白色比例閾值為 20%
-            alert.publish("駛離槽化線")
-            rospy.loginfo("檢測到雙白線，且白色比例低於閾值，駛離槽化線")
-            return True, binary
+                # 檢查高度相似性和平行性
+                if abs(h1 - h2) < 20 and abs(x1 - x2) < 30:
+                    # 檢查兩者的水平間距
+                    distance = abs(y1 - y2)
+                    if 50 < distance < 200:  # 假設合理的間距範圍
+                        alert.publish("駛離槽化線")
+                        rospy.loginfo("雙白線（長條狀白色區域）檢測成功")
+                        return True, binary
 
-        # 如果檢測到雙白線，但白色比例未降低，仍判斷為在槽化線內
-        rospy.loginfo("雙白線檢測成功，車輛仍在槽化線內")
         return False, binary
-
 
 
     def callback(self, msg):
