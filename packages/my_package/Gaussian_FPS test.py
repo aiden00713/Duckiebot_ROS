@@ -10,6 +10,7 @@ import numpy as np
 from cv_bridge import CvBridge
 from pylsd2 import LineSegmentDetectionED
 import time
+import matplotlib.pyplot as plt
 
 
 class CameraReaderNode(DTROS):
@@ -24,6 +25,9 @@ class CameraReaderNode(DTROS):
         # performance tracking
         self.start_time = None
         self.frame_count = 0
+        self.fps_data = []  # Store FPS data
+        self.time_data = []  # Store time data
+        self.duration = 30  # Record for 30 seconds
         # create window
         self._window = "Processed Image"
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
@@ -51,6 +55,15 @@ class CameraReaderNode(DTROS):
         if elapsed_time > 0:
             fps = self.frame_count / elapsed_time
             rospy.loginfo(f"FPS: {fps:.2f}")
+            
+            # Record FPS and time
+            self.fps_data.append(fps)
+            self.time_data.append(elapsed_time)
+
+        # Stop recording after 30 seconds
+        if elapsed_time > self.duration:
+            rospy.signal_shutdown("Finished 30 seconds of recording.")
+            self.plot_fps()
 
     def process_image_with_blur(self, image):
         """
@@ -76,6 +89,20 @@ class CameraReaderNode(DTROS):
                 cv2.line(output_image, (x1, y1), (x2, y2), (0, 255, 0), 1)
 
         return output_image
+
+    def plot_fps(self):
+        """
+        Plot FPS data as a line graph
+        """
+        plt.figure(figsize=(10, 5))
+        plt.plot(self.time_data, self.fps_data, marker='o', label="FPS")
+        plt.xlabel("Time (s)")
+        plt.ylabel("FPS")
+        plt.title("FPS Over Time (0-30 seconds)_Gaussian")
+        plt.legend()
+        plt.grid()
+        plt.tight_layout()
+        plt.show()
 
 
 if __name__ == '__main__':

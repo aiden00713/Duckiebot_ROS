@@ -10,6 +10,8 @@ from cv_bridge import CvBridge
 import numpy as np
 from pylsd2 import LineSegmentDetectionED
 import time
+import matplotlib.pyplot as plt
+
 
 class CameraReaderNode(DTROS):
 
@@ -24,17 +26,20 @@ class CameraReaderNode(DTROS):
         # performance tracking
         self.start_time = None
         self.frame_count = 0
+        self.fps_data = []  # List to store FPS
+        self.time_data = []  # List to store time points
+        self.max_duration = 30  # Run for 30 seconds
         # create window
-        self._window = "camera-reader"
+        self._window = "Processed Image"
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
         # construct subscriber
         self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
 
     def callback(self, msg):
-        # convert JPEG bytes to CV image
+        # Convert JPEG bytes to CV image
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
         
-        # Start timing for performance
+        # Start timing for performance tracking
         if self.start_time is None:
             self.start_time = time.time()
         
@@ -51,6 +56,14 @@ class CameraReaderNode(DTROS):
         if elapsed_time > 0:
             fps = self.frame_count / elapsed_time
             rospy.loginfo(f"FPS: {fps:.2f}")
+            # Record FPS and time
+            self.fps_data.append(fps)
+            self.time_data.append(elapsed_time)
+
+        # Stop recording after 30 seconds
+        if elapsed_time > self.max_duration:
+            rospy.signal_shutdown("Completed 30 seconds of recording.")
+            self.plot_fps()
 
     def process_image(self, image):
         # Extract the lower half of the image
@@ -87,6 +100,21 @@ class CameraReaderNode(DTROS):
             if min_intensity <= mean_intensity <= max_intensity:
                 filtered_lines.append((line, mean_intensity))
         return filtered_lines
+
+    def plot_fps(self):
+        """
+        Plot FPS data as a line graph
+        """
+        plt.figure(figsize=(10, 5))
+        plt.plot(self.time_data, self.fps_data, marker='o', label="FPS")
+        plt.xlabel("Time (s)")
+        plt.ylabel("FPS")
+        plt.title("FPS Over Time (0-30 seconds)_EDLines")
+        plt.legend()
+        plt.grid()
+        plt.tight_layout()
+        plt.show()
+
 
 if __name__ == '__main__':
     # create the node
