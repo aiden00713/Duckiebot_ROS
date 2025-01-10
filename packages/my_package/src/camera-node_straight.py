@@ -12,6 +12,9 @@ from std_msgs.msg import String, Float32
 import gc
 from collections import deque
 
+import time
+start_time = time.time()  # 記錄程式開始時間
+frame_counter = 0         # 計算幀數
 
 # [直線]計算線段與水平線的夾角，根據設定參數決定是忽略還是接受水平線
 def angle_with_horizontal(x1, y1, x2, y2, mode):
@@ -129,6 +132,9 @@ def filter_lines_by_intensity(image, lines, intensity_threshold):
     return filtered_lines
 
 
+def calculate_line_angle(line):
+    x1, y1, x2, y2 = line
+    return np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
 
 # [直線]計算直線角度
 def calculate_steering_angle(lines):
@@ -205,24 +211,31 @@ def is_between_lane_lines(stop_line, left_lines, right_lines, image_width):
 
 # 定義一個滑動窗格大小
 WINDOW_SIZE = 10
-
+ALPHA = 0.1
 # 儲存之前前幾筆數據的陣列
 left_line_history = deque(maxlen=WINDOW_SIZE)
 right_line_history = deque(maxlen=WINDOW_SIZE)
 
-def smooth_lines(line_history, new_line, weight=0.8):
+def smooth_lines(line_history, new_line, alpha=ALPHA):
+    """
+    使用指數加權移動平均 (EWMA) 平滑線段
+    :param line_history: 歷史線段數據列表
+    :param new_line: 新增的線段數據
+    :param alpha: 平滑係數，控制新數據的影響程度
+    :return: 平滑後的線段數據
+    """
     # 如果歷史數據為空，直接返回新線段
     if len(line_history) == 0:
         line_history.append(new_line)
         return new_line
-    
-    # 加入新線段
-    line_history.append(new_line)
-    
-    # 使用加權平均進行平滑
-    weights = [weight**i for i in range(len(line_history), 0, -1)]
-    weighted_average = np.average(line_history, axis=0, weights=weights)
-    return weighted_average.astype(int)
+
+    # 計算平滑值
+    smoothed_line = np.array(line_history[-1])  # 取最近的平滑值作為初始值
+    smoothed_line = (1 - alpha) * smoothed_line + alpha * np.array(new_line)
+
+    # 更新歷史數據
+    line_history.append(smoothed_line.tolist())
+    return smoothed_line.astype(int)
 
 
 class CameraReaderNode(DTROS):
@@ -307,20 +320,18 @@ class CameraReaderNode(DTROS):
     def process_image(self, src):
         # 使用共用的影像處理和線段偵測
         lines, processed_image = self.preprocess_and_detect_lines(src)
-        
         height, width = processed_image.shape[:2]
+        center_x = width // 2
 
-        
+        '''
         # Debugging: Draw all detected lines before filtering
-        debug_image = processed_image.copy()
+        debug_image = edges.copy()
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = map(int, line[:4])
                 cv2.line(debug_image, (x1, y1), (x2, y2), (255, 255, 255), 2)
         cv2.imshow("All Detected Lines", debug_image)
-        
-
-        center_x = width // 2
+        '''
 
         if lines is not None and len(lines) > 0:
             # 根據角度忽略水平線
@@ -328,7 +339,7 @@ class CameraReaderNode(DTROS):
             # 根據影像灰值過濾線段
             lines = filter_lines_by_intensity(processed_image, lines, 100)
             # 根據距離閥值過濾線段 min-max
-            lines = filter_lines_by_distance(lines, 50, 200)
+            lines = filter_lines_by_distance(lines, 100, 200)
 
             # 根據影像中間位置區分左、右線段
             for line in lines:
@@ -370,17 +381,36 @@ class CameraReaderNode(DTROS):
         left_x1, left_y1, left_x2, left_y2 = left_line
         right_x1, right_y1, right_x2, right_y2 = right_line
 
+        # 延伸左右線段
         left_x_intercept = left_x1 + (left_x2 - left_x1) * (height - left_y1) / (left_y2 - left_y1) if left_y2 != left_y1 else left_x1
         right_x_intercept = right_x1 + (right_x2 - right_x1) * (height - right_y1) / (right_y2 - right_y1) if right_y2 != right_y1 else right_x1
 
+        # 計算車道中心和偏移量
         lane_center = (left_x_intercept + right_x_intercept) / 2
         offset = center_x - lane_center
 
-        # Calculate steering angle
-        steering_angle = calculate_steering_angle(lines)
+        # 計算方向角
+        left_angle = calculate_line_angle(left_line) if left_line is not None else 0
+        right_angle = calculate_line_angle(right_line) if right_line is not None else 0
+        angle = (left_angle + right_angle) / 2  # 平均角度
+
+        # 偏移箭頭
+        arrow_end_x = int(center_x - offset)  # 箭頭指向的 x 座標
+        arrow_start = (center_x, int(height * 0.5))  # 箭頭起點（影像中間）
+        arrow_end = (arrow_end_x, int(height * 0.5))  # 箭頭終點
+        arrow_color = (0, 0, 255) if offset > 0 else (255, 0, 0)  # 偏左為紅色，偏右為藍色
+        cv2.arrowedLine(processed_image, arrow_start, arrow_end, arrow_color, 3)
+
+        # 顯示偏移量和方向角
+        cv2.putText(processed_image, f"Windows_size: {WINDOW_SIZE}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        cv2.putText(processed_image, f"alpha: {ALPHA}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        cv2.putText(processed_image, f"Offset: {offset:.2f}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(processed_image, f"Angle: {angle:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+        print(f"[Offset: {offset:.2f}] [Angle: {angle:.2f}]") #record data
 
         cv2.line(processed_image, (center_x, 0), (center_x, height), (0, 255, 0), 2)    
-        return processed_image, offset, steering_angle
+        return processed_image, offset, angle
 
     # [直線]停止線判斷程式
     def detect_stop_line(self, src):
@@ -466,19 +496,11 @@ class CameraReaderNode(DTROS):
         red_minus_blue = cv2.subtract(red_channel, blue_channel)
 
         # 增強局部對比度 (CLAHE)
-        clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(4, 4))
+        clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(8, 8))
         enhanced_red_channel = clahe.apply(red_minus_blue)
 
         # 對紅色通道進行二值化，檢測高亮區域（黃色外框）
         _, binary = cv2.threshold(enhanced_red_channel, 100, 255, cv2.THRESH_BINARY)
-        
-        # **計算白色面積**
-        white_pixel_count = cv2.countNonZero(binary)  # 計算白色像素數
-        total_pixel_count = binary.size  # 總像素數
-        white_ratio = white_pixel_count / total_pixel_count  # 白色比例
-
-        # **打印白色比例**
-        print(f"白色區域比例: {white_ratio:.2%} ({white_pixel_count}/{total_pixel_count} 像素)")
 
         # 找到雙白線輪廓
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -495,8 +517,13 @@ class CameraReaderNode(DTROS):
         for rect in rectangles:
             x, y, w, h = rect
             # 在原始影像上繪製綠色矩形框表示檢測到的長條狀白色區域
-            cv2.rectangle(binary, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
         
+        # 顯示二值化的結果（Binary Mask）
+        cv2.imshow("Binary Mask", binary)
+
+        # 顯示帶檢測框的原始影像
+        cv2.imshow("Detected Rectangles", image)
 
         # 檢測長條狀白色區域的幾何關係
         for i, rect1 in enumerate(rectangles):
@@ -510,7 +537,7 @@ class CameraReaderNode(DTROS):
                 if abs(h1 - h2) < 20 and abs(x1 - x2) < 30:
                     # 檢查兩者的水平間距
                     distance = abs(y1 - y2)
-                    if 5 < distance < 30:  # 假設合理的間距範圍
+                    if 50 < distance < 200:  # 假設合理的間距範圍
                         alert.publish("駛離槽化線")
                         rospy.loginfo("雙白線（長條狀白色區域）檢測成功")
                         return True, binary
@@ -560,6 +587,6 @@ if __name__ == '__main__':
         pass
 
 '''
-2024.11.24 新增偵測槽化線
+2025.01.10 調整直線模式測試值
 
 '''
