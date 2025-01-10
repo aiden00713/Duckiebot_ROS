@@ -13,8 +13,6 @@ import gc
 from collections import deque
 
 import time
-start_time = time.time()  # 記錄程式開始時間
-frame_counter = 0         # 計算幀數
 
 # [直線]計算線段與水平線的夾角，根據設定參數決定是忽略還是接受水平線
 def angle_with_horizontal(x1, y1, x2, y2, mode):
@@ -283,6 +281,9 @@ class CameraReaderNode(DTROS):
         # 初始化 left_lines 和 right_lines
         self.left_lines = []
         self.right_lines = []
+
+        self.start_time = time.time()  # 記錄程式開始時間
+        self.frame_counter = 0 
 
     # [無法使用]調整鏡頭快門速度
     def set_shutter_speed(self, shutter_speed_value):
@@ -560,6 +561,11 @@ class CameraReaderNode(DTROS):
         self.straight_status_pub.publish(status_message)
         print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
         '''
+        self.frame_counter += 1
+        elapsed_time = time.time() - self.start_time
+        if elapsed_time > 0:
+            print(f"Time: {elapsed_time:.2f}")
+
 
         # 處理縮小線段檢測
         shrinking_detected, shrinking_image = self.detect_shrinking_lines(image.copy(), self.alert_pub)
