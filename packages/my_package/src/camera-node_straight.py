@@ -338,7 +338,7 @@ class CameraReaderNode(DTROS):
             # 根據角度忽略水平線
             lines = filter_lines_by_angle(lines, 0)
             # 根據影像灰值過濾線段
-            lines = filter_lines_by_intensity(processed_image, lines, 100)
+            #lines = filter_lines_by_intensity(processed_image, lines, 100)
             # 根據距離閥值過濾線段 min-max
             lines = filter_lines_by_distance(lines, 100, 200)
 
@@ -357,13 +357,13 @@ class CameraReaderNode(DTROS):
                 left_line = np.median(self.left_lines, axis=0).astype(int)
                 left_smoothed = smooth_lines(left_line_history, left_line)
                 left_extend = extend_line(*left_smoothed[:4], height, processed_image)
-                cv2.line(processed_image, (left_smoothed[0], left_smoothed[1]), (left_smoothed[2], left_smoothed[3]), (0, 255, 0), 2)
+                cv2.line(processed_image, (left_smoothed[0], left_smoothed[1]), (left_smoothed[2], left_smoothed[3]), (0, 255, 0), 2) #這是畫短線段的
 
             if self.right_lines:
                 right_line = np.median(self.right_lines, axis=0).astype(int)
                 right_smoothed = smooth_lines(right_line_history, right_line)
                 right_extend = extend_line(*right_smoothed[:4], height, processed_image)
-                cv2.line(processed_image, (right_smoothed[0], right_smoothed[1]), (right_smoothed[2], right_smoothed[3]), (0, 255, 0), 2)
+                cv2.line(processed_image, (right_smoothed[0], right_smoothed[1]), (right_smoothed[2], right_smoothed[3]), (0, 255, 0), 2) #這是畫短線段的
 
             '''
             # Output the distances for debugging
@@ -376,13 +376,13 @@ class CameraReaderNode(DTROS):
                         cv2.putText(gaussian, f"{distance:.2f}", (midpoint_x, midpoint_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             '''
         
-        left_line = np.mean(self.left_lines, axis=0).astype(int) if self.left_lines else [0, 0, 0, 0]
-        right_line = np.mean(self.right_lines, axis=0).astype(int) if self.right_lines else [width, 0, width, 0]
+        #left_line = np.mean(self.left_lines, axis=0).astype(int) if self.left_lines else [0, 0, 0, 0]
+        #right_line = np.mean(self.right_lines, axis=0).astype(int) if self.right_lines else [width, 0, width, 0]
 
         left_x1, left_y1, left_x2, left_y2 = left_line
         right_x1, right_y1, right_x2, right_y2 = right_line
 
-        # 延伸左右線段
+        # 延伸左右線段交點
         left_x_intercept = left_x1 + (left_x2 - left_x1) * (height - left_y1) / (left_y2 - left_y1) if left_y2 != left_y1 else left_x1
         right_x_intercept = right_x1 + (right_x2 - right_x1) * (height - right_y1) / (right_y2 - right_y1) if right_y2 != right_y1 else right_x1
 
