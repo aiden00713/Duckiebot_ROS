@@ -323,6 +323,8 @@ class CameraReaderNode(DTROS):
         lines, processed_image = self.preprocess_and_detect_lines(src)
         height, width = processed_image.shape[:2]
         center_x = width // 2
+        # 計算從啟動到現在的累計時間
+        elapsed_time = time.time() - self.start_time
 
         '''
         # Debugging: Draw all detected lines before filtering
@@ -341,6 +343,16 @@ class CameraReaderNode(DTROS):
             #lines = filter_lines_by_intensity(processed_image, lines, 100)
             # 根據距離閥值過濾線段 min-max
             lines = filter_lines_by_distance(lines, 100, 200)
+
+             # 線段數量
+            num_lines = len(lines)
+
+            # 計算線段總長度
+            total_length = sum(np.sqrt((line[2] - line[0])**2 + (line[3] - line[1])**2) for line in lines)
+
+            # 打印線段數量和總長度
+            print(f"Elapsed Time: {elapsed_time:.2f}s, Detected lines: {num_lines}, Total line length: {total_length:.2f}")
+
 
             # 根據影像中間位置區分左、右線段
             for line in lines:
@@ -408,7 +420,7 @@ class CameraReaderNode(DTROS):
         cv2.putText(processed_image, f"Offset: {offset:.2f}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv2.putText(processed_image, f"Angle: {angle:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-        print(f"[Offset: {offset:.2f}] [Angle: {angle:.2f}]") #record data
+        #print(f"[Offset: {offset:.2f}] [Angle: {angle:.2f}]") #record data
 
         cv2.line(processed_image, (center_x, 0), (center_x, height), (0, 255, 0), 2)    
         return processed_image, offset, angle
@@ -562,10 +574,6 @@ class CameraReaderNode(DTROS):
         print(f"Current state: {self.state}, Turn direction: {self.turn_direction}")
         '''
         self.frame_counter += 1
-        elapsed_time = time.time() - self.start_time
-        if elapsed_time > 0:
-            print(f"Time: {elapsed_time:.2f}")
-
 
         # 處理縮小線段檢測
         shrinking_detected, shrinking_image = self.detect_shrinking_lines(image.copy(), self.alert_pub)
