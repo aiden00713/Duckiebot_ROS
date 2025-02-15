@@ -220,7 +220,7 @@ class WheelControlNode(DTROS):
 
 
         #message = WheelsCmdStamped(vel_left = left, vel_right = right)
-        message = Twist2DStamped(v = 0.09, omega = adjustment)
+        message = Twist2DStamped(v = 0.2, omega = adjustment)
 
         print(f"Twist2D omega: {adjustment}")
 

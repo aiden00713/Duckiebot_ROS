@@ -50,33 +50,44 @@ def publish_commands(commands, publisher):
         while i < len(commands):  # 內部 while 負責處理命令輸入
             command = commands[i]
 
-            if command == '0':  # 🛑 完全停止
+            if command == '0':  # 🛑 完全停止，並退出所有迴圈
                 rospy.loginfo("🛑 Stop command received, stopping the vehicle")
                 publisher.publish('0')  # 發送停止指令
-                rospy.sleep(3.0)  # 確保停止後才繼續
-                rospy.loginfo("✅ Vehicle stopped, waiting for next command")
-                i += 1  # 移動到下一個指令
-                break  # 結束內部 while，等待新的命令
+                rospy.sleep(3.0)  # 確保車輛完全停止
+                rospy.loginfo("✅ Vehicle fully stopped. Exiting command loop.")
+                return  # 🚨 **這裡 `return` 讓函式直接結束，不會再執行其他命令**
 
-            elif command in ['2', '3', '4', '5']:  # 🚥 轉向或變道
-                if command in ['2', '3']:  # 轉彎
-                    rospy.loginfo(f"Executing turn command: {command}")
-                    publisher.publish(command)
-                    rospy.sleep(5.0)  # 等待轉彎完成
+            elif command in ['2', '3']:  # 🚥 轉彎（先檢查距離條件）
+                rospy.loginfo(f"⚠️ Command {command} detected, checking distance thresholds")
+
+                if inter_distance >= distance_threshold1:  
+                    rospy.loginfo(f"Distance {inter_distance} meets threshold {distance_threshold1}, executing turn")
+                    publisher.publish('0')  # 先停止
+                    rospy.sleep(1.5)
+                    publisher.publish(command)  # 執行轉彎
+                    rospy.sleep(3.0)  # 等待轉彎完成
                     rospy.loginfo(f"Returning to straight after turn")
+                    publisher.publish('1')  # 恢復直行
+                    rospy.sleep(1.0)
+                else:
+                    rospy.loginfo(f"❌ Distance {inter_distance} below threshold {distance_threshold1}, skipping turn")
 
-                elif command in ['4', '5']:  # 變道
-                    rospy.loginfo(f"Executing lane change command: {command}")
-                    publisher.publish(command)
-                    rospy.sleep(3.0)  # 等待變道完成
+                i += 1  # 移動到下一個指令
+                break  # 結束內部 while，回到外部 while 讓車輛繼續直行
 
-                # 轉向或變道後，恢復直行
+            elif command in ['4', '5']:  # 🚦 變道
+                rospy.loginfo(f"Executing lane change command: {command}")
+                publisher.publish('0')  # **先停止車輛**
+                rospy.sleep(1.5)
+                publisher.publish(command)
+                rospy.sleep(3.0)  # 等待變道完成
                 rospy.loginfo("✅ Resuming forward movement")
                 publisher.publish('1')  
                 rospy.sleep(2.0)  # 讓直行至少保持 2 秒再檢查下一個指令
 
                 i += 1  # 移動到下一個指令
                 break  # 結束內部 while，回到外部 while 讓車輛繼續直行
+
 
 
 def main():
@@ -97,7 +108,7 @@ def main():
         collect_lane_data(20)
 
         rospy.loginfo("Getting command sequence")
-        command_sequence = rospy.get_param('~command_sequence', '013353350')  # Get command sequence from parameter
+        command_sequence = rospy.get_param('~command_sequence', '3353350')  # Get command sequence from parameter
         publish_commands(command_sequence, command_publisher)
 
     except Exception as e:

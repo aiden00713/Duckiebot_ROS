@@ -209,7 +209,7 @@ def is_between_lane_lines(stop_line, left_lines, right_lines, image_width):
 
 # 定義一個滑動窗格大小
 WINDOW_SIZE = 10
-ALPHA = 0.1
+ALPHA = 0.3
 # 儲存之前前幾筆數據的陣列
 left_line_history = deque(maxlen=WINDOW_SIZE)
 right_line_history = deque(maxlen=WINDOW_SIZE)

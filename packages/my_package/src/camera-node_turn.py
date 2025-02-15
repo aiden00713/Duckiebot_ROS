@@ -179,12 +179,15 @@ def preprocess_and_detect_lines(image, min_line_len, line_fit_err_thres=1.4):
     # 灰度轉換，僅使用紅色通道
     red_channel = image[height//2:height, :, 2]  # 只保留下半部的紅色通道
     blurred = cv2.GaussianBlur(red_channel, (5, 5), 0)  # 模糊去噪
-    edges = cv2.Canny(blurred, 70, 210)  # Canny 邊緣偵測
+    #edges = cv2.Canny(blurred, 70, 210)  # Canny 邊緣偵測
 
     # 線段偵測
-    lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=line_fit_err_thres)
+    lines = LineSegmentDetectionED(blurred, min_line_len=min_line_len, line_fit_err_thres=line_fit_err_thres)
     
-    return lines, edges  # 返回檢測到的線段及邊緣處理後的影像
+    # 將灰階影像轉換為 BGR 影像，讓 cv2.line() 可以正確運作
+    processed_image = cv2.cvtColor(red_channel, cv2.COLOR_GRAY2BGR)
+
+    return lines, processed_image  # 返回檢測到的線段及邊緣處理後的影像
 
 
 def detect_curved_lane(src, inter_dist_pub):
@@ -205,11 +208,11 @@ def detect_curved_lane(src, inter_dist_pub):
             #cv2.line(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 1)
         
         # 設置虛線檢測參數
-        length_min = 10
-        length_max = 40
-        gap_min = 20
-        gap_max = 40
-        distance_threshold = 200
+        length_min = 5
+        length_max = 50
+        gap_min = 10
+        gap_max = 30
+        distance_threshold = 100
 
         # 檢查是否為虛線
         #is_dashed, dashed_lines, control_points_x, control_points_y = is_dashed_line(all_points, length_min, length_max, gap_min, gap_max)
@@ -263,6 +266,8 @@ def detect_curved_lane(src, inter_dist_pub):
 
                     dist = dist_from_bottom_center(x1, y1, 640, 480)
                     inter_dist_pub.publish(Float32(dist))
+
+                cv2.putText(processed_image, f"inter_dist: {dist}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
                 # 繪製曲線
                 for i in range(len(x_fine) - 1):
