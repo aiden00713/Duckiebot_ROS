@@ -36,62 +36,48 @@ def collect_lane_data(duration=20):
     rospy.loginfo("Lane data collection complete. Starting movement...")
 
 def publish_commands(commands, publisher):
-    global inter_distance, distance_threshold1, distance_threshold2
+    global inter_distance, distance_threshold1, distance_threshold2, tof_distance
 
-    threshold_window = deque(maxlen=5)
     i = 0
+    
+    # 🚗 大 while 迴圈讓車輛持續直行
+    while not rospy.is_shutdown():
+        rospy.loginfo("🚗 Keeping vehicle moving forward")
+        publisher.publish('1')  # 讓車輛持續直行
+        rospy.sleep(0.5)  # 讓直行指令頻繁發送，避免丟失
 
-    while i < len(commands):
-        command = commands[i]
+        # 🏁 檢查是否需要執行其他命令
+        while i < len(commands):  # 內部 while 負責處理命令輸入
+            command = commands[i]
 
-        # 🚗 Default: Always move forward
-        if command == '1':
-            rospy.loginfo(f"Publishing command: {command} in loop")
-            publisher.publish(command)
-            rospy.sleep(1.0)  
+            if command == '0':  # 🛑 完全停止
+                rospy.loginfo("🛑 Stop command received, stopping the vehicle")
+                publisher.publish('0')  # 發送停止指令
+                rospy.sleep(3.0)  # 確保停止後才繼續
+                rospy.loginfo("✅ Vehicle stopped, waiting for next command")
+                i += 1  # 移動到下一個指令
+                break  # 結束內部 while，等待新的命令
 
-            # Check for lane changes using ToF
-            for _ in range(40):
-                rospy.sleep(0.2)
+            elif command in ['2', '3', '4', '5']:  # 🚥 轉向或變道
+                if command in ['2', '3']:  # 轉彎
+                    rospy.loginfo(f"Executing turn command: {command}")
+                    publisher.publish(command)
+                    rospy.sleep(5.0)  # 等待轉彎完成
+                    rospy.loginfo(f"Returning to straight after turn")
 
-                if tof_distance < tof_threshold:  # 🚧 Obstacle detected
-                    rospy.loginfo("Obstacle detected by ToF, switching lane to the LEFT")
-                    publisher.publish('4')  # Force Left Lane Change
-                    rospy.sleep(2.0)  
-                    publisher.publish('1')  # 🔄 Return to moving forward
-                    break  
+                elif command in ['4', '5']:  # 變道
+                    rospy.loginfo(f"Executing lane change command: {command}")
+                    publisher.publish(command)
+                    rospy.sleep(3.0)  # 等待變道完成
 
-                if inter_distance is not None:
-                    threshold_window.append(inter_distance)
-                    count_warning = sum(1 for d in threshold_window if d >= distance_threshold1)
-                    count_final = sum(1 for d in threshold_window if d >= distance_threshold2)
+                # 轉向或變道後，恢復直行
+                rospy.loginfo("✅ Resuming forward movement")
+                publisher.publish('1')  
+                rospy.sleep(2.0)  # 讓直行至少保持 2 秒再檢查下一個指令
 
-                    if i + 1 < len(commands) and commands[i + 1] in ['2', '3']:  # Turn Left or Right
-                        if count_warning >= 3 and count_final >= 3:
-                            rospy.loginfo(f"Breaking loop as command {commands[i+1]} follows '1' and moving average exceeds threshold")
-                            break  
+                i += 1  # 移動到下一個指令
+                break  # 結束內部 while，回到外部 while 讓車輛繼續直行
 
-            i += 1
-            continue  
-
-        # 🏁 Turn Left (`2`), Right (`3`), Big Left (`6`), Big Right (`7`)
-        elif command in ['2', '3', '6', '7']:
-            rospy.loginfo(f"Executing turn command: {command}")
-            publisher.publish(command)
-            rospy.sleep(5.0)  # Reduce stop delay for efficiency
-            rospy.loginfo(f"Returning to straight after turn")
-            publisher.publish('1')  # 🔄 Always return to straight after turn
-
-        # Stop, Lane Change Left (`4`), Right (`5`)
-        elif command in ['0', '4', '5']:
-            rospy.loginfo(f"Publishing command: {command} once")
-            publisher.publish(command)
-            rospy.sleep(5.0)  
-            
-        else:
-            rospy.logwarn(f"Unknown command: {command}")
-
-        i += 1
 
 def main():
     try:
