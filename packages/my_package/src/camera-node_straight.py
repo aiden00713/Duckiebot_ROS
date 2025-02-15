@@ -283,7 +283,9 @@ class CameraReaderNode(DTROS):
         self.right_lines = []
 
         self.start_time = time.time()  # 記錄程式開始時間
-        self.frame_counter = 0 
+        self.frame_counter = 0
+        # 設定 FPS（例如 30 FPS）
+        self.rate = rospy.Rate(30)  # 30 FPS
 
     # [無法使用]調整鏡頭快門速度
     def set_shutter_speed(self, shutter_speed_value):
@@ -351,7 +353,7 @@ class CameraReaderNode(DTROS):
             total_length = sum(np.sqrt((line[2] - line[0])**2 + (line[3] - line[1])**2) for line in lines)
 
             # 打印線段數量和總長度
-            print(f"Elapsed Time: {elapsed_time:.2f}s, Detected lines: {num_lines}, Total line length: {total_length:.2f}")
+            #print(f"Elapsed Time: {elapsed_time:.2f}s, Detected lines: {num_lines}, Total line length: {total_length:.2f}")
 
 
             # 根據影像中間位置區分左、右線段
@@ -402,28 +404,36 @@ class CameraReaderNode(DTROS):
         lane_center = (left_x_intercept + right_x_intercept) / 2
         offset = center_x - lane_center
 
+        # 如果偏移量超過閾值，才進行修正
+        if abs(offset) > 20:
+            fix_offset = offset
+        else:
+            fix_offset = 0  # 偏移量在範圍內，不修正
+
+
         # 計算方向角
         left_angle = calculate_line_angle(left_line) if left_line is not None else 0
         right_angle = calculate_line_angle(right_line) if right_line is not None else 0
         angle = (left_angle + right_angle) / 2  # 平均角度
 
         # 偏移箭頭
-        arrow_end_x = int(center_x - offset)  # 箭頭指向的 x 座標
+        arrow_end_x = int(center_x - fix_offset)  # 箭頭指向的 x 座標
         arrow_start = (center_x, int(height * 0.5))  # 箭頭起點（影像中間）
         arrow_end = (arrow_end_x, int(height * 0.5))  # 箭頭終點
-        arrow_color = (0, 0, 255) if offset > 0 else (255, 0, 0)  # 偏左為紅色，偏右為藍色
+        arrow_color = (0, 0, 255) if fix_offset > 0 else (255, 0, 0)  # 偏左為紅色，偏右為藍色
         cv2.arrowedLine(processed_image, arrow_start, arrow_end, arrow_color, 3)
 
         # 顯示偏移量和方向角
         cv2.putText(processed_image, f"Windows_size: {WINDOW_SIZE}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         cv2.putText(processed_image, f"alpha: {ALPHA}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        cv2.putText(processed_image, f"Offset: {offset:.2f}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(processed_image, f"Angle: {angle:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(processed_image, f"Real Offset: {offset:.2f}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(processed_image, f"FIX Offset: {fix_offset:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(processed_image, f"Angle: {angle:.2f}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         #print(f"[Offset: {offset:.2f}] [Angle: {angle:.2f}]") #record data
 
         cv2.line(processed_image, (center_x, 0), (center_x, height), (0, 255, 0), 2)    
-        return processed_image, offset, angle
+        return processed_image, fix_offset, angle
 
     # [直線]停止線判斷程式
     def detect_stop_line(self, src):
@@ -533,10 +543,10 @@ class CameraReaderNode(DTROS):
             cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
         
         # 顯示二值化的結果（Binary Mask）
-        cv2.imshow("Binary Mask", binary)
+        #cv2.imshow("Binary Mask", binary)
 
         # 顯示帶檢測框的原始影像
-        cv2.imshow("Detected Rectangles", image)
+        #cv2.imshow("Detected Rectangles", image)
 
         # 檢測長條狀白色區域的幾何關係
         for i, rect1 in enumerate(rectangles):
@@ -590,6 +600,8 @@ class CameraReaderNode(DTROS):
         cv2.imshow(self._window3, shrinking_image)
         cv2.waitKey(1)
 
+        self.rate.sleep()
+
 if __name__ == '__main__':
     try:
         # create the node
@@ -601,6 +613,5 @@ if __name__ == '__main__':
         pass
 
 '''
-2025.01.10 調整直線模式測試值
-
+2025.02.16 
 '''

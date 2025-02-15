@@ -5,7 +5,6 @@ import rospy
 import os
 from pylsd2 import LineSegmentDetectionED
 from duckietown.dtros import DTROS, NodeType
-from scipy.interpolate import CubicSpline, splprep, splev, PchipInterpolator
 from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge
 from std_msgs.msg import String, Float32
@@ -692,15 +691,15 @@ class CameraReaderNode(DTROS):
 
         # Detect curved lane
         curved_lane_image, is_curved = detect_curved_lane(image.copy(), self.inter_dist_pub)
-        BIG_curved_lane_image, lanes_detected, left_fit_fn, right_fit_fn = BIG_detect_curved_lane(image.copy())
+        #BIG_curved_lane_image, lanes_detected, left_fit_fn, right_fit_fn = BIG_detect_curved_lane(image.copy())
         
         # Display the processed image
         cv2.namedWindow(self._window_curved, cv2.WINDOW_AUTOSIZE)
-        cv2.namedWindow(self._window_curved2, cv2.WINDOW_AUTOSIZE)
+        #cv2.namedWindow(self._window_curved2, cv2.WINDOW_AUTOSIZE)
         #cv2.namedWindow(self._window_left, cv2.WINDOW_AUTOSIZE)
         #cv2.namedWindow(self._window_right, cv2.WINDOW_AUTOSIZE)
         cv2.imshow(self._window_curved, curved_lane_image)
-        cv2.imshow(self._window_curved2, BIG_curved_lane_image)
+        #cv2.imshow(self._window_curved2, BIG_curved_lane_image)
         #cv2.imshow(self._window_left, left_processed_image)
         #cv2.imshow(self._window_right, right_processed_image)
         cv2.waitKey(1)
@@ -731,3 +730,8 @@ if __name__ == '__main__':
         rospy.spin()
     except rospy.ROSInterruptException:
         pass
+
+
+'''
+2025.02.16 
+'''

@@ -41,7 +41,7 @@ class WheelControlNode(DTROS):
         self._omega = OMEGA
 
         # ToF傳感器和相機節點角度和距離的主題
-        #self._tof = f"/{self._vehicle_name}/front_center_tof_driver_node/range"
+        self._tof = f"/{self._vehicle_name}/front_center_tof_driver_node/range"
         self._angle_topic = f"/{self._vehicle_name}/camera_node_straight/angles" #直線角度
         self._offset_topic = f"/{self._vehicle_name}/camera_node_straight/offset"
 
@@ -55,7 +55,7 @@ class WheelControlNode(DTROS):
         # 構造發布者和訂閱者
         #self._publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
         self.publisher = rospy.Publisher(twist_topic, Twist2DStamped, queue_size=1)
-        #self.distance_subscriber = rospy.Subscriber(self._tof, Range, self.dis_callback)
+        self.distance_subscriber = rospy.Subscriber(self._tof, Range, self.dis_callback)
         #self.straight_status_subscriber = rospy.Subscriber(self._straight_status_topic, String, self.straight_status_callback)
         self.angle_subscriber = rospy.Subscriber(self._angle_topic, Float32, self.angle_callback)
         self.offset_subscriber = rospy.Subscriber(self._offset_topic, Float32, self.offset_callback)
@@ -374,5 +374,5 @@ if __name__ == '__main__':
         pass
 
 '''
-20240719 不使用PID控制 僅使用角度和偏移量控制馬達 WINDOWS_SIZE=10 加入TCP smooth的方式 alpha=0.125
+2025.02.16 
 '''
