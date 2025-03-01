@@ -209,7 +209,7 @@ def is_between_lane_lines(stop_line, left_lines, right_lines, image_width):
 
 # 定義一個滑動窗格大小
 WINDOW_SIZE = 10
-ALPHA = 0.3
+ALPHA = 0.1
 # 儲存之前前幾筆數據的陣列
 left_line_history = deque(maxlen=WINDOW_SIZE)
 right_line_history = deque(maxlen=WINDOW_SIZE)
@@ -327,7 +327,8 @@ class CameraReaderNode(DTROS):
         center_x = width // 2
         # 計算從啟動到現在的累計時間
         elapsed_time = time.time() - self.start_time
-
+        self.left_lines.clear()
+        self.right_lines.clear()
         '''
         # Debugging: Draw all detected lines before filtering
         debug_image = edges.copy()
@@ -366,7 +367,23 @@ class CameraReaderNode(DTROS):
                     self.right_lines.append(line)
 
             #print(f"Left lines: {len(left_lines)}, Right lines: {len(right_lines)}")
+            
+            # Select and draw lines
+            if self.left_lines:
+                left_line = max(self.left_lines, key=lambda line: (line[0] + line[2]) / 2)
+                left_extend = extend_line(*left_line[:4], height, processed_image)
+                cv2.line(processed_image, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
+            else:
+                left_line = None
 
+            if self.right_lines:
+                right_line = min(self.right_lines, key=lambda line: (line[0] + line[2]) / 2)
+                right_extend = extend_line(*right_line[:4], height, processed_image)
+                cv2.line(processed_image, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
+            else:
+                right_line = None
+            
+            '''
             if self.left_lines:
                 left_line = np.median(self.left_lines, axis=0).astype(int)
                 left_smoothed = smooth_lines(left_line_history, left_line)
@@ -378,6 +395,7 @@ class CameraReaderNode(DTROS):
                 right_smoothed = smooth_lines(right_line_history, right_line)
                 right_extend = extend_line(*right_smoothed[:4], height, processed_image)
                 cv2.line(processed_image, (right_smoothed[0], right_smoothed[1]), (right_smoothed[2], right_smoothed[3]), (0, 255, 0), 2) #這是畫短線段的
+            '''
 
             '''
             # Output the distances for debugging
@@ -613,5 +631,5 @@ if __name__ == '__main__':
         pass
 
 '''
-2025.02.16 
+2025.03.02
 '''
