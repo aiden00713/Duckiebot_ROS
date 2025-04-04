@@ -9,7 +9,9 @@ declare -A NODES=(
     ["1"]="camera-node_straight"
     ["2"]="camera-node_turn"
     ["3"]="wheel_node4"
-    ["4"]="control"
+    ["4"]="wheel_node-test"
+    ["5"]="control"
+    ["9"]="auto-screenshot"
 )
 
 # 定義要監控的 ROS 主題及其描述
@@ -142,4 +144,4 @@ while true; do
     sleep 2  # 每 2 秒更新一次數據，避免刷屏
 done
 
-# 2025.02.16
+# 2025.04.04
