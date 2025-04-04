@@ -7,108 +7,103 @@ from collections import deque
 import time  # Import time module for precise time tracking
 
 inter_distance = 0
+lane_positions = []
+tof_distance = 0
+
 distance_threshold1 = 330
 distance_threshold2 = 320
-
-tof_distance = 0
 tof_threshold = 500  # Adjust based on experiment
-
-lane_positions = []  # Store collected lane position data
 
 def tof_callback(msg):
     global tof_distance
     tof_distance = int(1000 * msg.range)  # Convert meters to mm
 
-# Collect lane position data
 def inter_distance_callback(msg):
     global inter_distance
     inter_distance = msg.data
     lane_positions.append(inter_distance)  # Store lane position data
 
 def collect_lane_data(duration=20):
-    """ Collect lane position data for a given duration (default: 20 seconds). """
     rospy.loginfo(f"Collecting lane position data for {duration} seconds...")
     start_time = time.time()
-    
     while time.time() - start_time < duration and not rospy.is_shutdown():
-        rospy.sleep(0.2)  # Sleep in small increments to keep data collection smooth
-    
+        rospy.sleep(0.2)
     rospy.loginfo("Lane data collection complete. Starting movement...")
 
+def wait_for_intersection(threshold=80, timeout=10):
+    global inter_distance
+    start_time = time.time()
+    while time.time() - start_time < timeout and not rospy.is_shutdown():
+        if inter_distance and inter_distance < threshold:
+            return True
+        rospy.sleep(0.1)
+    return False
+
 def publish_commands(commands, publisher):
-    global inter_distance, distance_threshold1, distance_threshold2, tof_distance
+    global inter_distance, tof_distance
 
     i = 0
-    
-    # 🚗 大 while 迴圈讓車輛持續直行
     while not rospy.is_shutdown():
-        rospy.loginfo("🚗 Keeping vehicle moving forward")
-        publisher.publish('1')  # 讓車輛持續直行
-        rospy.sleep(0.5)  # 讓直行指令頻繁發送，避免丟失
+        if i >= len(commands):
+            rospy.loginfo("✅ All commands executed.")
+            break
 
-        # 🏁 檢查是否需要執行其他命令
-        while i < len(commands):  # 內部 while 負責處理命令輸入
-            command = commands[i]
+        command = commands[i]
 
-            if command == '0':  # 🛑 完全停止，並退出所有迴圈
-                rospy.loginfo("🛑 Stop command received, stopping the vehicle")
-                publisher.publish('0')  # 發送停止指令
-                rospy.sleep(3.0)  # 確保車輛完全停止
-                rospy.loginfo("✅ Vehicle fully stopped. Exiting command loop.")
-                return  # 🚨 **這裡 `return` 讓函式直接結束，不會再執行其他命令**
+        if command == '1':
+            publisher.publish('1')
+            rospy.loginfo("🚗 Forward")
+            rospy.sleep(3.0) 
+            i += 1
 
-            elif command in ['2', '3']:  # 🚥 轉彎（先檢查距離條件）
-                rospy.loginfo(f"⚠️ Command {command} detected, checking distance thresholds")
+        elif command == '0':
+            publisher.publish('0')
+            rospy.loginfo("🛑 Stop")
+            rospy.sleep(3.0)
+            i += 1
 
-                if inter_distance >= distance_threshold1:  
-                    rospy.loginfo(f"Distance {inter_distance} meets threshold {distance_threshold1}, executing turn")
-                    publisher.publish('0')  # 先停止
-                    rospy.sleep(1.5)
-                    publisher.publish(command)  # 執行轉彎
-                    rospy.sleep(3.0)  # 等待轉彎完成
-                    rospy.loginfo(f"Returning to straight after turn")
-                    publisher.publish('1')  # 恢復直行
-                    rospy.sleep(1.0)
-                else:
-                    rospy.loginfo(f"❌ Distance {inter_distance} below threshold {distance_threshold1}, skipping turn")
-
-                i += 1  # 移動到下一個指令
-                break  # 結束內部 while，回到外部 while 讓車輛繼續直行
-
-            elif command in ['4', '5']:  # 🚦 變道
-                rospy.loginfo(f"Executing lane change command: {command}")
-                publisher.publish('0')  # **先停止車輛**
-                rospy.sleep(1.5)
+        elif command in ['2', '3']:  # 左轉或右轉
+            rospy.loginfo(f"⚠️ Command {command}: waiting for intersection...")
+            if wait_for_intersection():
                 publisher.publish(command)
-                rospy.sleep(3.0)  # 等待變道完成
-                rospy.loginfo("✅ Resuming forward movement")
-                publisher.publish('1')  
-                rospy.sleep(2.0)  # 讓直行至少保持 2 秒再檢查下一個指令
+                rospy.loginfo("🔄 Executing turn")
+                rospy.sleep(3.0)
+                publisher.publish('1')
+                rospy.sleep(2.0)
+                i += 1
+            else:
+                rospy.loginfo("❌ No intersection detected yet")
+                rospy.sleep(0.5)
 
-                i += 1  # 移動到下一個指令
-                break  # 結束內部 while，回到外部 while 讓車輛繼續直行
+        elif command in ['4', '5']:  # 變道
+            publisher.publish(command)
+            rospy.loginfo(f"↔️ Lane change: {command}")
+            rospy.sleep(3.0)
+            publisher.publish('1')
+            rospy.sleep(2.0)
+            i += 1
 
-
+        else:
+            rospy.logwarn(f"❓ Unknown command: {command}")
+            i += 1
 
 def main():
     try:
         rospy.init_node('control_node')
         rospy.loginfo("ROS node initialized")
         vehicle_name = os.environ.get('VEHICLE_NAME', 'duckiebot06')
-        global distance_threshold
 
         command_topic = f"/{vehicle_name}/wheel_control_node/command"
         rospy.loginfo(f"Command topic: {command_topic}")
         command_publisher = rospy.Publisher(command_topic, String, queue_size=10)
-        
-        rospy.Subscriber(f"/{vehicle_name}/camera_node_turn/inter_dist", Float32, inter_distance_callback)  # Replace with actual topic name
+
+        rospy.Subscriber(f"/{vehicle_name}/camera_node_turn/inter_dist", Float32, inter_distance_callback)
         rospy.Subscriber(f"/{vehicle_name}/front_center_tof_driver_node/range", Float32, tof_callback)
 
-        # 🛠️ **Collect lane position data before starting movement**
         collect_lane_data(20)
 
         rospy.loginfo("Getting command sequence")
-        command_sequence = rospy.get_param('~command_sequence', '3353350')  # Get command sequence from parameter
+        command_sequence = rospy.get_param('~command_sequence', '10')
         publish_commands(command_sequence, command_publisher)
 
     except Exception as e:
@@ -125,5 +120,6 @@ if __name__ == "__main__":
         exit(1)
 
 '''
-2025.02.16 
+revised 2025.04.04
+整合視覺交叉口判斷 + 路徑規劃命令執行
 '''

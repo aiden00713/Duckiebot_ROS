@@ -411,6 +411,21 @@ class CameraReaderNode(DTROS):
         #left_line = np.mean(self.left_lines, axis=0).astype(int) if self.left_lines else [0, 0, 0, 0]
         #right_line = np.mean(self.right_lines, axis=0).astype(int) if self.right_lines else [width, 0, width, 0]
 
+        # 如果目前沒有偵測，就使用上一次的
+        if left_line is None:
+            left_line = self.last_left_line
+        else:
+            self.last_left_line = left_line
+
+        if right_line is None:
+            right_line = self.last_right_line
+        else:
+            self.last_right_line = right_line
+
+        # 如果還是缺一邊就放棄這幀
+        if left_line is None or right_line is None:
+            return processed_image, self.last_offset, self.last_steering_angle
+
         left_x1, left_y1, left_x2, left_y2 = left_line
         right_x1, right_y1, right_x2, right_y2 = right_line
 
@@ -435,11 +450,13 @@ class CameraReaderNode(DTROS):
         angle = (left_angle + right_angle) / 2  # 平均角度
 
         # 偏移箭頭
+        '''
         arrow_end_x = int(center_x - fix_offset)  # 箭頭指向的 x 座標
         arrow_start = (center_x, int(height * 0.5))  # 箭頭起點（影像中間）
         arrow_end = (arrow_end_x, int(height * 0.5))  # 箭頭終點
         arrow_color = (0, 0, 255) if fix_offset > 0 else (255, 0, 0)  # 偏左為紅色，偏右為藍色
         cv2.arrowedLine(processed_image, arrow_start, arrow_end, arrow_color, 3)
+        '''
 
         # 顯示偏移量和方向角
         cv2.putText(processed_image, f"Windows_size: {WINDOW_SIZE}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
