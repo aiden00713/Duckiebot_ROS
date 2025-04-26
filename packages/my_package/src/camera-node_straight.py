@@ -148,6 +148,47 @@ def calculate_steering_angle(lines):
     avg_angle = np.mean(angles)
     return avg_angle
 
+
+def calculate_inner_angles(left_line, right_line):
+    """
+    計算三角形底部左右兩個內角（範圍 0°–180°）。
+    left_line, right_line: (x1, y1, x2, y2)
+    回傳 (inner_L, inner_R)
+    """
+    # 解構輸入
+    x1_L, y1_L, x2_L, y2_L = left_line
+    x1_R, y1_R, x2_R, y2_R = right_line
+
+    # 計算兩條直線的交點（消失點）
+    denom = (x1_L - x2_L)*(y1_R - y2_R) - (y1_L - y2_L)*(x1_R - x2_R)
+    if abs(denom) < 1e-6:
+        return 0.0, 0.0  # 平行或近似平行，返回 0
+
+    px = ((x1_L*y2_L - y1_L*x2_L)*(x1_R - x2_R) - (x1_L - x2_L)*(x1_R*y2_R - y1_R*x2_R)) / denom
+    py = ((x1_L*y2_L - y1_L*x2_L)*(y1_R - y2_R) - (y1_L - y2_L)*(x1_R*y2_R - y1_R*x2_R)) / denom
+    vanish = np.array((px, py))
+
+    # 底部頂點
+    base_L = np.array((x1_L, y1_L))
+    base_R = np.array((x1_R, y1_R))
+
+    # 向量：側邊與底邊
+    vL_side = vanish - base_L
+    vL_base = base_R - base_L
+    vR_side = vanish - base_R
+    vR_base = base_L - base_R
+
+    # 內角計算：arccos( (u·v) / (|u||v|) )
+    def angle_between(u, v):
+        cosθ = np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v))
+        cosθ = np.clip(cosθ, -1.0, 1.0)
+        return np.degrees(np.arccos(cosθ))
+
+    inner_L = angle_between(vL_side, vL_base)
+    inner_R = angle_between(vR_side, vR_base)
+
+    return inner_L, inner_R
+
 # [直線]計算橫向偏移量 不使用
 def calculate_offset(image):
         height, width = image.shape[:2]
@@ -443,11 +484,20 @@ class CameraReaderNode(DTROS):
         else:
             fix_offset = 0  # 偏移量在範圍內，不修正
 
-
+        '''
         # 計算方向角
         left_angle = calculate_line_angle(left_line) if left_line is not None else 0
         right_angle = calculate_line_angle(right_line) if right_line is not None else 0
         angle = (left_angle + right_angle) / 2  # 平均角度
+        '''
+        inner_L, inner_R = calculate_inner_angles(left_extend, right_extend)
+        #print(f"左邊內角 = {inner_L:.1f}°, 右邊內角 = {inner_R:.1f}°")
+        cv2.putText(processed_image, f"Left Angle: {inner_L:.2f}", (350, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(processed_image, f"Right Angle: {inner_R:.2f}", (350, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        # 現在 inner_L, inner_R 就是三角形底部的左右內角
+        # 如果想取平均作為最終方向偏差：
+        angle = (inner_L + inner_R) / 2
+
 
         # 偏移箭頭
         '''
@@ -463,7 +513,7 @@ class CameraReaderNode(DTROS):
         cv2.putText(processed_image, f"alpha: {ALPHA}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         cv2.putText(processed_image, f"Real Offset: {offset:.2f}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv2.putText(processed_image, f"FIX Offset: {fix_offset:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(processed_image, f"Angle: {angle:.2f}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        #cv2.putText(processed_image, f"Angle: {angle:.2f}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         #print(f"[Offset: {offset:.2f}] [Angle: {angle:.2f}]") #record data
 
