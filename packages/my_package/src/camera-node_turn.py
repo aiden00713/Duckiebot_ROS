@@ -178,16 +178,13 @@ def preprocess_and_detect_lines(image, min_line_len, line_fit_err_thres=1.4):
     
     # 灰度轉換，僅使用紅色通道
     red_channel = image[height//2:height, :, 2]  # 只保留下半部的紅色通道
-    blurred = cv2.GaussianBlur(red_channel, (5, 5), 0)  # 模糊去噪
-    #edges = cv2.Canny(blurred, 70, 210)  # Canny 邊緣偵測
+    blurred = cv2.GaussianBlur(red_channel, (5, 5), 1)  # 模糊去噪
+    #dges = cv2.Canny(blurred, 70, 210)  # Canny 邊緣偵測
 
     # 線段偵測
     lines = LineSegmentDetectionED(blurred, min_line_len=min_line_len, line_fit_err_thres=line_fit_err_thres)
     
-    # 將灰階影像轉換為 BGR 影像，讓 cv2.line() 可以正確運作
-    processed_image = cv2.cvtColor(red_channel, cv2.COLOR_GRAY2BGR)
-
-    return lines, processed_image  # 返回檢測到的線段及邊緣處理後的影像
+    return lines, blurred  # 返回檢測到的線段及邊緣處理後的影像
 
 
 def detect_curved_lane(src, inter_dist_pub):
@@ -208,11 +205,11 @@ def detect_curved_lane(src, inter_dist_pub):
             #cv2.line(processed_image, (x1, y1), (x2, y2), (0, 255, 0), 1)
         
         # 設置虛線檢測參數
-        length_min = 5
-        length_max = 50
-        gap_min = 10
-        gap_max = 30
-        distance_threshold = 100
+        length_min = 10
+        length_max = 40
+        gap_min = 20
+        gap_max = 40
+        distance_threshold = 200
 
         # 檢查是否為虛線
         #is_dashed, dashed_lines, control_points_x, control_points_y = is_dashed_line(all_points, length_min, length_max, gap_min, gap_max)
@@ -267,8 +264,6 @@ def detect_curved_lane(src, inter_dist_pub):
                     dist = dist_from_bottom_center(x1, y1, 640, 480)
                     inter_dist_pub.publish(Float32(dist))
 
-                cv2.putText(processed_image, f"inter_dist: {dist}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
                 # 繪製曲線
                 for i in range(len(x_fine) - 1):
                     cv2.line(processed_image, (int(x_fine[i]), int(y_fine[i])), (int(x_fine[i + 1]), int(y_fine[i + 1])), (0, 0, 255), 3)
@@ -285,6 +280,95 @@ def detect_curved_lane(src, inter_dist_pub):
     else:
         print("No lines detected.")
         return processed_image, False
+
+
+# 利用色塊偵測虛線
+def is_dashed_blocks(image, *, inter_dist_pub,
+                     area_min=0,      # 最少只要 >0 就能過
+                     area_max=15,     # 根據你的 log 調成 15
+                     distance_threshold=100):
+    """
+    色塊偵測虛線（只用紅色通道），畫出所有步驟並回傳結果影像 + 偵測旗標。
+    """
+    output = image.copy()
+    h, w = image.shape[:2]
+    y_off = h // 2
+
+    # 1. 取紅色通道並二值化（只對下半部做）
+    red = image[y_off:, :, 2]
+    _, binary = cv2.threshold(red, 0, 255,
+                              cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # （如果你要開運算，可以調小 kernel 或先註解掉看效果）
+    # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    # binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+
+    cv2.imshow("binary_mask", binary)
+
+    # 2+3. 找輪廓，篩面積後畫藍框＋綠點
+    contours, _ = cv2.findContours(binary,
+                                   cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    print("[is_dashed_blocks] total contours:", len(contours))
+    pts_x, pts_y = [], []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        # 只要 area > area_min(0) 且 < area_max(15) 就畫
+        if area_min < area < area_max:
+            x, y, ww, hh = cv2.boundingRect(cnt)
+            # 藍框
+            cv2.rectangle(output,
+                          (x, y + y_off),
+                          (x + ww, y + hh + y_off),
+                          (255, 0, 0), 2)
+            # 質心
+            M = cv2.moments(cnt)
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            pts_x.append(cx)
+            pts_y.append(cy)
+            cv2.circle(output,
+                       (cx, cy + y_off),
+                       3, (0,255,0), -1)
+            print(f"  → kept contour: area={area:.1f}, bbox=({x},{y})")
+
+    # 一定要把畫完的 output 顯示出來
+    cv2.imshow("dashed_detection", output)
+
+    # 沒收集到足夠點就回傳 False
+    if len(pts_x) < 4:
+        return output, False
+
+    # 4. 排序、去密集點、過濾過遠點（同你原本邏輯）
+    pts_x = np.array(pts_x); pts_y = np.array(pts_y)
+    idx = np.argsort(pts_x)
+    pts_x, pts_y = pts_x[idx], pts_y[idx]
+    pts_x, pts_y = remove_close_points(pts_x, pts_y)
+    x_center = (pts_x.min() + pts_x.max()) / 2
+    fx, fy = [], []
+    for x_, y_ in zip(pts_x, pts_y):
+        if abs(x_ - x_center) <= distance_threshold:
+            fx.append(x_); fy.append(y_)
+    # 5. 擬合二次曲線並畫紅線
+    if len(fx) > 3:
+        z = np.polyfit(fx, fy, 2)
+        p = np.poly1d(z)
+        xs = np.linspace(min(fx), max(fx), 100)
+        ys = p(xs)
+        for i in range(len(xs)-1):
+            cv2.line(output,
+                     (int(xs[i]),   int(ys[i] + y_off)),
+                     (int(xs[i+1]), int(ys[i+1] + y_off)),
+                     (0, 0, 255), 2)
+        # 發佈距離
+        dist = np.hypot(x_center - w/2,
+                        np.mean(fy) - h)
+        inter_dist_pub.publish(Float32(dist))
+        # 再次顯示最終結果
+        cv2.imshow("dashed_detection", output)
+        return output, True
+
+    return output, False
+
 
 # 專門處理大轉彎虛線轉彎輔助線的影像
 def BIG_detect_curved_lane(src):
@@ -695,7 +779,14 @@ class CameraReaderNode(DTROS):
 
 
         # Detect curved lane
-        curved_lane_image, is_curved = detect_curved_lane(image.copy(), self.inter_dist_pub)
+        #curved_lane_image, is_curved = detect_curved_lane(image.copy(), self.inter_dist_pub)
+        curved_lane_image, is_curved = is_dashed_blocks(
+            image,
+            inter_dist_pub=self.inter_dist_pub,
+            area_min=30,     # 可調
+            area_max=2000,   # 可調
+            distance_threshold=150  # 可調
+        )
         #BIG_curved_lane_image, lanes_detected, left_fit_fn, right_fit_fn = BIG_detect_curved_lane(image.copy())
         
         # Display the processed image
@@ -738,5 +829,5 @@ if __name__ == '__main__':
 
 
 '''
-2025.02.16 
+2025.04.27 
 '''
