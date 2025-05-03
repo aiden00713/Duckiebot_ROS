@@ -352,11 +352,11 @@ class CameraReaderNode(DTROS):
         height, width = image.shape[:2]
         # 灰度轉換，僅使用紅色通道
         red_channel = image[height//2:height, :, 2]  # 只保留下半部的紅色通道
-        blurred = cv2.GaussianBlur(red_channel, (5, 5), 0)  # 模糊去噪
-        edges = cv2.Canny(blurred, 70, 210)  # Canny 邊緣偵測
+        blurred = cv2.GaussianBlur(red_channel, (5, 5), 1)  # 模糊去噪
+        #edges = cv2.Canny(blurred, 70, 210)  # Canny 邊緣偵測
 
         # 線段偵測
-        lines = LineSegmentDetectionED(edges, min_line_len=min_line_len, line_fit_err_thres=line_fit_err_thres)
+        lines = LineSegmentDetectionED(blurred, min_line_len=min_line_len, line_fit_err_thres=line_fit_err_thres)
         
         return lines, blurred  # 返回檢測到的線段及邊緣處理後的影像
 
@@ -494,10 +494,11 @@ class CameraReaderNode(DTROS):
         #print(f"左邊內角 = {inner_L:.1f}°, 右邊內角 = {inner_R:.1f}°")
         cv2.putText(processed_image, f"Left Angle: {inner_L:.2f}", (350, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv2.putText(processed_image, f"Right Angle: {inner_R:.2f}", (350, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
         # 現在 inner_L, inner_R 就是三角形底部的左右內角
         # 如果想取平均作為最終方向偏差：
-        angle = (inner_L + inner_R) / 2
-
+        angle = inner_R + inner_L
+        cv2.putText(processed_image, f" L+R Angle: {angle:.2f}", (350, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         # 偏移箭頭
         '''
@@ -513,9 +514,9 @@ class CameraReaderNode(DTROS):
         cv2.putText(processed_image, f"alpha: {ALPHA}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         cv2.putText(processed_image, f"Real Offset: {offset:.2f}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv2.putText(processed_image, f"FIX Offset: {fix_offset:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        #cv2.putText(processed_image, f"Angle: {angle:.2f}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-        #print(f"[Offset: {offset:.2f}] [Angle: {angle:.2f}]") #record data
+
+        #print(f"[Offset: {offset:.2f}] [L+R Angle: {angle:.2f}]") #record data
 
         cv2.line(processed_image, (center_x, 0), (center_x, height), (0, 255, 0), 2)    
         return processed_image, fix_offset, angle
@@ -698,5 +699,5 @@ if __name__ == '__main__':
         pass
 
 '''
-2025.03.02
+2025.05.03
 '''

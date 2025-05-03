@@ -270,7 +270,7 @@ class WheelControlNode(DTROS):
             adjustment = offset_adjustment + angle_adjustment
 
             print(f"{self.control_mode},{rospy.Time.now().to_sec():.2f},{offset_adjustment:.3f},{angle_adjustment:.3f},{adjustment:.3f}")
-        
+
         else:
             rospy.logwarn("Unknown control mode, defaulting to PID+EWMA.")
             offset_adjustment = self.offset_pid.compute(setpoint=0, measurement=smoothed_offset)
@@ -352,9 +352,9 @@ class WheelControlNode(DTROS):
         print(f"Adjusting wheels based on offset and angle adjustment: left={left}, right={right}")
         self.publish_wheel_cmd(left, right)
 
-    def calculate_combined_adjustment(self, offset, angle, alpha=0.4):
-        offset_max = 100.0
-        angle_max = 30.0
+    def calculate_combined_adjustment(self, offset, angle, alpha=0.5):
+        offset_max = 100.0 #可能要修改
+        angle_max = 30.0 #可能要修改
 
         offset_norm = offset / offset_max
         angle_norm = angle / angle_max
