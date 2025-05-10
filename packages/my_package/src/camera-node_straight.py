@@ -11,7 +11,7 @@ from cv_bridge import CvBridge
 from std_msgs.msg import String, Float32
 import gc
 from collections import deque
-
+import math
 import time
 
 # [直線]計算線段與水平線的夾角，根據設定參數決定是忽略還是接受水平線
@@ -499,7 +499,9 @@ class CameraReaderNode(DTROS):
         # 如果想取平均作為最終方向偏差：
         angle = inner_R + inner_L
         cv2.putText(processed_image, f" L+R Angle: {angle:.2f}", (350, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
+        dx = lane_center - 310.4
+        delta_psi = math.degrees(math.atan2(dx, 326.7))
+        cv2.putText(processed_image, f" delta_psi: {delta_psi:.2f}", (350, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         # 偏移箭頭
         '''
         arrow_end_x = int(center_x - fix_offset)  # 箭頭指向的 x 座標
