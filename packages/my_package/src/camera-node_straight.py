@@ -370,6 +370,9 @@ class CameraReaderNode(DTROS):
         elapsed_time = time.time() - self.start_time
         self.left_lines.clear()
         self.right_lines.clear()
+        left_extend = None
+        right_extend = None
+
         '''
         # Debugging: Draw all detected lines before filtering
         debug_image = edges.copy()
@@ -490,7 +493,12 @@ class CameraReaderNode(DTROS):
         right_angle = calculate_line_angle(right_line) if right_line is not None else 0
         angle = (left_angle + right_angle) / 2  # 平均角度
         '''
-        inner_L, inner_R = calculate_inner_angles(left_extend, right_extend)
+        if left_extend is not None and right_extend is not None:
+            inner_L, inner_R = calculate_inner_angles(left_extend, right_extend)
+        else:
+            # no valid pair of lines → default or skip
+            inner_L, inner_R = 0.0, 0.0
+
         #print(f"左邊內角 = {inner_L:.1f}°, 右邊內角 = {inner_R:.1f}°")
         cv2.putText(processed_image, f"Left Angle: {inner_L:.2f}", (350, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv2.putText(processed_image, f"Right Angle: {inner_R:.2f}", (350, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
