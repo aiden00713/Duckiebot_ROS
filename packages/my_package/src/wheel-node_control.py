@@ -35,7 +35,8 @@ class WheelControlNode(DTROS):
         # ToF傳感器和相機節點角度和距離的主題
         self._tof = f"/{self._vehicle_name}/front_center_tof_driver_node/range"
         self._angle_topic = f"/{self._vehicle_name}/camera_node_straight/angles" #直線角度
-
+        self.left_angle_topic = f"/{self._vehicle_name}/camera_node_straight/leftangle" #直線角度
+        self.right_angle_topic = f"/{self._vehicle_name}/camera_node_straight/rightangle" #直線角度
         self._offset_topic = f"/{self._vehicle_name}/camera_node_straight/offset"
 
         self._straight_status_topic = f"/{self._vehicle_name}/camera_node_turn/straight_status"
@@ -48,7 +49,8 @@ class WheelControlNode(DTROS):
         # 構造發布者和訂閱者
         #self._publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
         self.publisher = rospy.Publisher(twist_topic, Twist2DStamped, queue_size=1)
-        self.angle_subscriber = rospy.Subscriber(self._angle_topic, Float32, self.angle_callback)
+        self.left_angle_subscriber = rospy.Subscriber(self.left_angle_topic, Float32, self.left_angle_callback)
+        self.right_angle_subscriber = rospy.Subscriber(self.right_angle_topic, Float32, self.right_angle_callback)
         self.offset_subscriber = rospy.Subscriber(self._offset_topic, Float32, self.offset_callback)
 
 
@@ -102,25 +104,20 @@ class WheelControlNode(DTROS):
         self._angle = msg.data
         #rospy.loginfo(f"Received angle: {self._angle}")
 
+    def left_angle_callback(self, msg):
+        self.left_angle = msg.data
+        #self.left_angle_window.append(self.left_angle)
+        #rospy.loginfo(f"Received angle: {self._angle}")
+
+    def right_angle_callback(self, msg):
+        self.right_angle = msg.data
+        #self.right_angle_window.append(self.right_angle)
+        #rospy.loginfo(f"Received angle: {self._angle}")
 
 
     def forward(self):
-        #smoothed_offset = self.calculate_smoothed_value(self.offset_window)
-        #smoothed_angle = self.calculate_smoothed_value(self.angle_window)
-        #print(f"smoothed_offset: {smoothed_offset} , smoothed_angle: {smoothed_angle}")
-        
-        #adjustment = self.calculate_combined_adjustment(smoothed_offset, smoothed_angle)
-
-        # 使用 PID 控制器計算偏移量和角度的調整值
-        #offset_adjustment = self.offset_pid.compute(setpoint=0, measurement=smoothed_offset)
-        #angle_adjustment = self.angle_pid.compute(setpoint=0, measurement=smoothed_angle)
-
-        # 結合兩者的調整值來計算最終的 omega
-        #adjustment = offset_adjustment + angle_adjustment
-        
-
-        #message = WheelsCmdStamped(vel_left = left, vel_right = right)
-        message = Twist2DStamped(v = 0.09, omega = adjustment)
+        adjustment = self.calculate_combined_adjustment(self._offset, self.left_angle,  self.right_angle)
+        message = Twist2DStamped(v = 0.1, omega = adjustment)
 
         print(f"Twist2D omega: {adjustment}")
 
@@ -135,15 +132,33 @@ class WheelControlNode(DTROS):
         self.turning = False
 
 
-
     def calculate_combined_adjustment(self, offset, angle):
         """根據偏移量和角度計算調整值"""
-        offset_adjustment = offset * 0.0005  # 偏移量調整係數
-        angle_adjustment = angle * 0.008  # 角度調整係數
-        combined_adjustment = offset_adjustment + angle_adjustment
-        combined_adjustment = max(-0.5, min(0.5, combined_adjustment))  # 限制調整值的範圍
-        #rospy.loginfo(f"Calculated combined adjustment: {combined_adjustment} (offset: {offset_adjustment}, angle: {angle_adjustment})")
-        return combined_adjustment
+        A1, B1, C1, D1 = 0.0297, -0.1831, -0.0497, 12.6796
+        A2, B2, C2, D2 = 0.1589,  0.7349, -0.7358, 90.5100
+
+        # 控制增益
+        Kp_d = 0.0571  # rad/s per cm
+        Kp_a = 0.3820  # rad/s per rad
+
+        # 1) 狀態估計
+        d_est     = A1*offset + B1*left_angle + C1*right_angle + D1        # cm
+        angle_est = A2*offset + B2*left_angle + C2*right_angle + D2        # 絕對角度 (°)
+
+        # 2) 算出「偏航誤差」（度）
+        yaw_err_deg = angle_est - 90.0
+
+        # 3) 轉成弧度
+        yaw_err = math.radians(yaw_err_deg)  # rad
+
+        # 4) 計算角速度
+        omega = - Kp_d * d_est - Kp_a * yaw_err
+
+        print(f"dest     = {d_est:.2f} cm")
+        print(f"yaw_err   = {yaw_err_deg:.2f}° → {yaw_err:.4f} rad")
+        print(f"omega     = {omega:.4f} rad/s")
+
+        return omega
     
     def calculate_smoothed_value(self, data, alpha=0.25):
         if not data:
@@ -152,9 +167,6 @@ class WheelControlNode(DTROS):
         for value in data[1:]:
             ewma = (1 - alpha) * ewma + alpha * value
         return ewma
-
-    def run(self):
-        rospy.spin()
 
     def on_shutdown(self):
         self.stop()  # Use the stop method to stop the robot
