@@ -304,11 +304,12 @@ class CameraReaderNode(DTROS):
         LINE_LENGTH_HISTORY = deque(maxlen=20)  # 儲存線段長度的滑動窗口
         LINE_ANGLE_HISTORY = deque(maxlen=20)  # 儲存角度的滑動窗口
 
-        # construct subscriber
-        self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
+        
 
         #publisher angle
         self.angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_straight/angles", Float32, queue_size=10)
+        self.left_angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_straight/leftangle", Float32, queue_size=10)
+        self.right_angle_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_straight/rightangle", Float32, queue_size=10)
 
         #publisher offset
         self.offset_pub = rospy.Publisher(f"/{self._vehicle_name}/camera_node_straight/offset", Float32, queue_size=10)
@@ -327,6 +328,9 @@ class CameraReaderNode(DTROS):
         self.frame_counter = 0
         # 設定 FPS（例如 30 FPS）
         self.rate = rospy.Rate(30)  # 30 FPS
+
+        # construct subscriber
+        self.sub = rospy.Subscriber(self._camera_topic, CompressedImage, self.callback)
 
     # [無法使用]調整鏡頭快門速度
     def set_shutter_speed(self, shutter_speed_value):
@@ -500,16 +504,13 @@ class CameraReaderNode(DTROS):
             inner_L, inner_R = 0.0, 0.0
 
         #print(f"左邊內角 = {inner_L:.1f}°, 右邊內角 = {inner_R:.1f}°")
-        cv2.putText(processed_image, f"Left Angle: {inner_L:.2f}", (350, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(processed_image, f"Right Angle: {inner_R:.2f}", (350, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        #cv2.putText(processed_image, f"Left Angle: {inner_L:.2f}", (350, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        #cv2.putText(processed_image, f"Right Angle: {inner_R:.2f}", (350, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         # 現在 inner_L, inner_R 就是三角形底部的左右內角
         # 如果想取平均作為最終方向偏差：
         angle = inner_R + inner_L
-        cv2.putText(processed_image, f" L+R Angle: {angle:.2f}", (350, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        dx = lane_center - 310.4
-        delta_psi = math.degrees(math.atan2(dx, 326.7))
-        cv2.putText(processed_image, f" delta_psi: {delta_psi:.2f}", (350, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        #cv2.putText(processed_image, f" L+R Angle: {angle:.2f}", (350, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         # 偏移箭頭
         '''
         arrow_end_x = int(center_x - fix_offset)  # 箭頭指向的 x 座標
@@ -520,16 +521,20 @@ class CameraReaderNode(DTROS):
         '''
 
         # 顯示偏移量和方向角
-        cv2.putText(processed_image, f"Windows_size: {WINDOW_SIZE}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        cv2.putText(processed_image, f"alpha: {ALPHA}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        cv2.putText(processed_image, f"Real Offset: {offset:.2f}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(processed_image, f"FIX Offset: {fix_offset:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
+        #cv2.putText(processed_image, f"Windows_size: {WINDOW_SIZE}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        #cv2.putText(processed_image, f"alpha: {ALPHA}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        #cv2.putText(processed_image, f"Real Offset: {offset:.2f}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        #cv2.putText(processed_image, f"FIX Offset: {fix_offset:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        
+        #paper用顯示
+        cv2.putText(processed_image, f"HorDiff: {fix_offset:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2) 
+        cv2.putText(processed_image, f"L-angle: {inner_L:.2f}", (450, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(processed_image, f"R-angle: {inner_R:.2f}", (450, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         #print(f"[Offset: {offset:.2f}] [L+R Angle: {angle:.2f}]") #record data
 
         cv2.line(processed_image, (center_x, 0), (center_x, height), (0, 255, 0), 2)    
-        return processed_image, fix_offset, angle
+        return processed_image, fix_offset, inner_L, inner_R
 
     # [直線]停止線判斷程式
     def detect_stop_line(self, src):
@@ -667,9 +672,11 @@ class CameraReaderNode(DTROS):
     def callback(self, msg):
         # convert JPEG bytes to CV image
         image = self._bridge.compressed_imgmsg_to_cv2(msg)
-        processed_image, offset, steering_angle = self.process_image(image.copy())
+        processed_image, offset, left_angle, right_angle = self.process_image(image.copy())
         self.offset_pub.publish(Float32(offset))
-        self.angle_pub.publish(Float32(steering_angle))
+        self.left_angle_pub.publish(Float32(left_angle))
+        self.right_angle_pub.publish(Float32(right_angle))
+        #self.angle_pub.publish(Float32(steering_angle))
         #print(f"Current offset: {offset}")
         #print(f"Steering angle: {steering_angle}")
 
@@ -708,6 +715,5 @@ if __name__ == '__main__':
     except rospy.ROSInterruptException:
         pass
 
-'''
-2025.05.03
-'''
+
+#2025.06.17
