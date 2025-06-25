@@ -105,22 +105,24 @@ class WheelControlNode(DTROS):
         A1, B1, C1, D1 = 0.0297, -0.1831, -0.0497, 12.6796
         A2, B2, C2, D2 = 0.1589,  0.7349, -0.7358, 90.5100
 
-        # 控制增益
-        Kp_d = 0.0571  # rad/s per cm
-        Kp_a = 0.3820  # rad/s per rad
+        # 控制增益與最大角速度
+        alpha = 0.0571    # rad/s per cm
+        beta = 1.1459     # rad/s per rad
+        omega_max = 0.4   # 最大角速度限制
 
         # 1) 狀態估計
-        d_est     = A1*offset + B1*left_angle + C1*right_angle + D1        # cm
-        angle_est = A2*offset + B2*left_angle + C2*right_angle + D2        # 絕對角度 (°)
+        d_est = A1 * offset + B1 * left_angle + C1 * right_angle + D1        # cm
+        angle_est = A2 * offset + B2 * left_angle + C2 * right_angle + D2    # 絕對角度 (°)
 
-        # 2) 算出「偏航誤差」（度）
+        # 2) 偏航誤差（度 → 弧度）
         yaw_err_deg = angle_est - 90.0
-
-        # 3) 轉成弧度
         yaw_err = math.radians(yaw_err_deg)  # rad
 
-        # 4) 計算角速度
-        omega = - Kp_d * d_est - Kp_a * yaw_err
+        # 3) 原始角速度計算
+        raw_omega = - alpha * d_est - beta * yaw_err
+
+        # 4) 限制 omega 在 ±omega_max 內（使用 tanh 平滑飽和）
+        omega = omega_max * math.tanh(raw_omega / omega_max)
 
         print(f"dest     = {d_est:.2f} cm")
         print(f"yaw_err   = {yaw_err_deg:.2f}° → {yaw_err:.4f} rad")

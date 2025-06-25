@@ -10,9 +10,9 @@ inter_distance = 0
 lane_positions = []
 tof_distance = 0
 
-distance_threshold1 = 330
-distance_threshold2 = 320
-tof_threshold = 500  # Adjust based on experiment
+#distance_threshold1 = 330
+#distance_threshold2 = 320
+#tof_threshold = 500  # Adjust based on experiment
 
 def tof_callback(msg):
     global tof_distance
@@ -23,7 +23,7 @@ def inter_distance_callback(msg):
     inter_distance = msg.data
     lane_positions.append(inter_distance)  # Store lane position data
 
-def collect_lane_data(duration=20):
+def collect_lane_data(duration=5):
     rospy.loginfo(f"Collecting lane position data for {duration} seconds...")
     start_time = time.time()
     while time.time() - start_time < duration and not rospy.is_shutdown():
@@ -53,7 +53,7 @@ def publish_commands(commands, publisher):
         if command == '1':
             publisher.publish('1')
             rospy.loginfo("🚗 Forward")
-            rospy.sleep(3.0) 
+            rospy.sleep(2.0) 
             i += 1
 
         elif command == '0':
@@ -100,10 +100,10 @@ def main():
         rospy.Subscriber(f"/{vehicle_name}/camera_node_turn/inter_dist", Float32, inter_distance_callback)
         rospy.Subscriber(f"/{vehicle_name}/front_center_tof_driver_node/range", Float32, tof_callback)
 
-        collect_lane_data(20)
+        collect_lane_data(5)
 
         rospy.loginfo("Getting command sequence")
-        command_sequence = rospy.get_param('~command_sequence', '10')
+        command_sequence = rospy.get_param('~command_sequence', '11110')
         publish_commands(command_sequence, command_publisher)
 
     except Exception as e:
