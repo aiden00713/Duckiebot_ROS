@@ -8,41 +8,20 @@ from duckietown_msgs.msg import WheelsCmdStamped, Twist2DStamped
 from sensor_msgs.msg import Range
 from std_msgs.msg import Float32, String
 
-# Angular velocities for each wheel (quarter rotation a second)
-W_LEFT = 0.8 * (2 * math.pi)  # 表示每秒左輪轉 0.5 圈
-W_RIGHT = 0.5 * (2 * math.pi)  # 表示每秒右輪轉 0.5 圈
-VELOCITY = 0.3  # linear vel    , in m/s    , forward (+)
-OMEGA = 4.0
-
 class WheelControlNode(DTROS):
     def __init__(self, node_name):
         super(WheelControlNode, self).__init__(node_name=node_name, node_type=NodeType.GENERIC)
         self._vehicle_name = os.environ['VEHICLE_NAME']
-        wheel_radius_param = f"/{self._vehicle_name}/kinematics_node/radius"
         twist_topic = f"/{self._vehicle_name}/car_cmd_switch_node/cmd"
 
-        # 獲取Duckiebot的輪徑
-        wheel_radius = rospy.get_param(wheel_radius_param)
-
-        # 計算線速度
-        self._vel_left = W_LEFT * wheel_radius
-        self._vel_right = W_RIGHT * wheel_radius
-        print(f"INIT VEL LEFT {self._vel_left} INIT VEL RIGHT {self._vel_right}")
-
-        self._v = VELOCITY
-        self._omega = OMEGA
+        self._v = 0.1
+        self._omega = 0
 
         # ToF傳感器和相機節點角度和距離的主題
         self._tof = f"/{self._vehicle_name}/front_center_tof_driver_node/range"
-        self._angle_topic = f"/{self._vehicle_name}/camera_node_straight/angles" #直線角度
         self.left_angle_topic = f"/{self._vehicle_name}/camera_node_straight/leftangle" #直線角度
         self.right_angle_topic = f"/{self._vehicle_name}/camera_node_straight/rightangle" #直線角度
         self._offset_topic = f"/{self._vehicle_name}/camera_node_straight/offset"
-
-        self._straight_status_topic = f"/{self._vehicle_name}/camera_node_turn/straight_status"
-        self._inter_distance_topic = f"/{self._vehicle_name}/camera_node_turn/inter_dist" #距離路口虛線的距離
-        self._right_roi_distance_topic = f"/{self._vehicle_name}/camera_node_turn/right_dist"
-        self._left_roi_distance_topic = f"/{self._vehicle_name}/camera_node_turn/left_dist"
 
         self.command_topic = f"/{self._vehicle_name}/wheel_control_node/command"
 
@@ -53,26 +32,21 @@ class WheelControlNode(DTROS):
         self.right_angle_subscriber = rospy.Subscriber(self.right_angle_topic, Float32, self.right_angle_callback)
         self.offset_subscriber = rospy.Subscriber(self._offset_topic, Float32, self.offset_callback)
 
-
         self.command_subscriber = rospy.Subscriber(self.command_topic, String, self.command_callback)
 
-        # 狀態變量
-        self.state = "IDLE"
-        self.turn_direction = "NONE"
+        # 初始化
         self._offset = 0
-        self._angle = 0
-        self.turning = False  # 初始化轉彎標誌變量
+        self.left_angle = 0
+        self.right_angle = 0
 
+        rospy.on_shutdown(self.on_shutdown)
         # 初始化 PID 控制器
-        self.offset_pid = PIDController(kp=0.06, ki=0, kd=0.01)
-        self.angle_pid = PIDController(kp=0.06, ki=0, kd=0.01)
-
-        # 初始化時間變量
-        self.last_time = rospy.get_time()
+        #self.offset_pid = PIDController(kp=0.06, ki=0, kd=0.01)
+        #self.angle_pid = PIDController(kp=0.06, ki=0, kd=0.01)
 
         # 移动平均窗口
-        self.offset_window = collections.deque(maxlen=10)
-        self.angle_window = collections.deque(maxlen=10)
+        #self.offset_window = collections.deque(maxlen=10)
+        #self.angle_window = collections.deque(maxlen=10)
 
     
     def command_callback(self, msg):
@@ -100,10 +74,6 @@ class WheelControlNode(DTROS):
         self._offset = msg.data
         #rospy.loginfo(f"Received offset: {self._offset}")
 
-    def angle_callback(self, msg):
-        self._angle = msg.data
-        #rospy.loginfo(f"Received angle: {self._angle}")
-
     def left_angle_callback(self, msg):
         self.left_angle = msg.data
         #self.left_angle_window.append(self.left_angle)
@@ -122,17 +92,15 @@ class WheelControlNode(DTROS):
         print(f"Twist2D omega: {adjustment}")
 
         self.publisher.publish(message)
-        rospy.loginfo("Moving forward")
-        self.turning = False
+        rospy.loginfo("Moving forward...")
+
 
     def stop(self, event=None):
         message = Twist2DStamped(v=0, omega=0)
         self.publisher.publish(message)
-        rospy.loginfo("Stopped the robot")
-        self.turning = False
+        rospy.loginfo("Stop...")
 
-
-    def calculate_combined_adjustment(self, offset, angle):
+    def calculate_combined_adjustment(self, offset, left_angle, right_angle):
         """根據偏移量和角度計算調整值"""
         A1, B1, C1, D1 = 0.0297, -0.1831, -0.0497, 12.6796
         A2, B2, C2, D2 = 0.1589,  0.7349, -0.7358, 90.5100
