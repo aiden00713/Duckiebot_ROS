@@ -25,7 +25,7 @@ class WheelControlNode(DTROS):
         self.right_angle = 0
 
         # PID 控制器（單一控制器處理合併誤差）
-        self.combined_pid = PIDController(kp=0.4, ki=0.0, kd=0.0)
+        self.combined_pid = PIDController(kp=0.4, ki=0.01, kd=0.1) 
         self.omega_max = 0.4  # 最大角速度限制
 
         # 關閉時停止
@@ -88,9 +88,9 @@ class WheelControlNode(DTROS):
         # PID 計算
         omega_raw = self.combined_pid.compute(setpoint=0, measurement=combined_error)
         omega = max(min(omega_raw, self.omega_max), -self.omega_max)
-
+        #omega = omega_raw
         # 除錯用 log
-        print(f"[控制資訊] offset = {d_est:.2f} cm | yaw_err = {yaw_err_deg:.2f}° | omega = {omega:.4f} rad/s")
+        print(f"[PID控制資訊] offset = {d_est:.2f} cm | yaw_err = {yaw_err_deg:.2f}° | omega = {omega:.4f} rad/s")
 
         return omega
 

@@ -53,7 +53,7 @@ def publish_commands(commands, publisher):
         if command == '1':
             publisher.publish('1')
             rospy.loginfo("🚗 Forward")
-            rospy.sleep(2.0) 
+            rospy.sleep(0.2)
             i += 1
 
         elif command == '0':
@@ -100,10 +100,8 @@ def main():
         rospy.Subscriber(f"/{vehicle_name}/camera_node_turn/inter_dist", Float32, inter_distance_callback)
         rospy.Subscriber(f"/{vehicle_name}/front_center_tof_driver_node/range", Float32, tof_callback)
 
-        collect_lane_data(5)
-
         rospy.loginfo("Getting command sequence")
-        command_sequence = rospy.get_param('~command_sequence', '11110')
+        command_sequence = rospy.get_param('~command_sequence', '11111111110')
         publish_commands(command_sequence, command_publisher)
 
     except Exception as e:

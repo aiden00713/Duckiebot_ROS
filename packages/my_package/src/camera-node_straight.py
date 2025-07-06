@@ -277,6 +277,15 @@ def smooth_lines(line_history, new_line, alpha=ALPHA):
     return smoothed_line.astype(int)
 
 
+def bottom_x(line, height):
+    x1, y1, x2, y2 = line
+    if y2 - y1 == 0:  # 水平線段避免除0
+        return (x1 + x2) / 2
+    y_bottom = height - 1
+    return x1 + (x2 - x1) * (y_bottom - y1) / (y2 - y1)
+
+
+
 class CameraReaderNode(DTROS):
 
     def __init__(self, node_name):
@@ -418,14 +427,14 @@ class CameraReaderNode(DTROS):
             
             # Select and draw lines
             if self.left_lines:
-                left_line = max(self.left_lines, key=lambda line: (line[0] + line[2]) / 2)
+                left_line = max(self.left_lines, key=lambda line: bottom_x(line, height)) #bottom
                 left_extend = extend_line(*left_line[:4], height, processed_image)
                 cv2.line(processed_image, (left_line[0], left_line[1]), (left_line[2], left_line[3]), (0, 255, 0), 2)
             else:
                 left_line = None
 
             if self.right_lines:
-                right_line = min(self.right_lines, key=lambda line: (line[0] + line[2]) / 2)
+                right_line = min(self.right_lines, key=lambda line: bottom_x(line, height)) #bottom
                 right_extend = extend_line(*right_line[:4], height, processed_image)
                 cv2.line(processed_image, (right_line[0], right_line[1]), (right_line[2], right_line[3]), (0, 255, 0), 2)
             else:
