@@ -8,20 +8,21 @@ dt-launchfile-init
 declare -A NODES=(
     ["1"]="camera-node_straight"
     ["2"]="camera-node_turn"
-    ["3"]="wheel_node4"
-    ["4"]="wheel_node-test"
+    ["3"]="wheel-node_control"
+    ["4"]="wheel-node_control-PID"
     ["5"]="control"
+    ["8"]="wheel_node-test"
     ["9"]="auto-screenshot"
 )
 
 # 定義要監控的 ROS 主題及其描述
 declare -A TOPICS=(
-    ["/duckiebot06/camera_node_straight/angles"]="🔹 直線模式偵測到的車道角度"
-    ["/duckiebot06/camera_node_straight/offset"]="🔹 直線模式的車道偏移量"
-    ["/duckiebot06/camera_node_turn/angles"]="🔄 轉彎模式偵測到的轉彎角度"
-    ["/duckiebot06/camera_node_turn/inter_dist"]="📏 距離前方轉彎區域的距離"
-    ["/duckiebot06/wheel_control_node/command"]="⚙️  馬達控制指令"
-    ["/duckiebot06/front_center_tof_driver_node/range"]="🚧 ToF"
+    #["/duckiebot06/camera_node_straight/angles"]="🔹 直線模式偵測到的車道角度"
+    #["/duckiebot06/camera_node_straight/offset"]="🔹 直線模式的車道偏移量"
+    #["/duckiebot06/camera_node_turn/angles"]="🔄 轉彎模式偵測到的轉彎角度"
+    #["/duckiebot06/camera_node_turn/inter_dist"]="📏 距離前方轉彎區域的距離"
+    #["/duckiebot06/wheel_control_node/command"]="⚙️  馬達控制指令"
+    #["/duckiebot06/front_center_tof_driver_node/range"]="🚧 ToF"
 )
 
 # 清除舊的 rostopic 訂閱數據
@@ -77,6 +78,8 @@ function show_menu() {
     done
     echo "[X] 停止所有節點"
     echo "[Q] 退出"
+    echo "[C] 保留 straight.py 關閉其他節點"
+
 }
 
 # **啟動指定的 ROS 節點**
@@ -116,6 +119,32 @@ function process_user_input() {
     done
 }
 
+
+# **保留 camera-node_straight.py，關閉其他 ROS 節點**
+function stop_except_camera_node_straight() {
+    keep_node="camera-node_straight.py"
+    echo "🔄 關閉除了 $keep_node 的其他節點..."
+
+    if [ -f /tmp/ros_nodes.pid ]; then
+        while read -r line; do
+            node_name=$(echo "$line" | awk '{print $1}')
+            pid=$(echo "$line" | awk '{print $2}')
+            if [[ "$node_name" != "$keep_node" ]]; then
+                echo "🛑 關閉節點 $node_name (PID $pid)"
+                kill "$pid" 2>/dev/null
+            else
+                echo "✅ 保留節點 $node_name"
+            fi
+        done < /tmp/ros_nodes.pid
+        grep "$keep_node" /tmp/ros_nodes.pid > /tmp/ros_nodes_new.pid
+        mv /tmp/ros_nodes_new.pid /tmp/ros_nodes.pid
+    fi
+
+    pkill -f "rostopic echo"
+    monitor_topics  # 重新監聽
+}
+
+
 # **確保 `rostopic` 監聽在節點啟動後運行**
 monitor_topics &
 
@@ -126,7 +155,7 @@ while true; do
     read -r choice
 
     case $choice in
-        [1-4]*)
+        [1-9]*)
             process_user_input "$choice"
             ;;
         X|x)
@@ -137,6 +166,10 @@ while true; do
             echo "👋 退出 Duckiebot 控制系統"
             exit 0
             ;;
+        C|c)
+            stop_except_camera_node_straight
+            ;;
+
         *)
             echo "❌ 無效選擇，請重新輸入"
             ;;
@@ -144,4 +177,4 @@ while true; do
     sleep 2  # 每 2 秒更新一次數據，避免刷屏
 done
 
-# 2025.04.04
+# 2025.07.06
