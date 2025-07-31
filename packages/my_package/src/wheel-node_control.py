@@ -102,8 +102,8 @@ class WheelControlNode(DTROS):
 
     def calculate_combined_adjustment(self, offset, left_angle, right_angle):
         """根據偏移量和角度計算調整值"""
-        A1, B1, C1, D1 = 0.0297, -0.1831, -0.0497, 12.6796
-        A2, B2, C2, D2 = 0.1589,  0.7349, -0.7358, 90.5100
+        A1, B1, C1, D1 = 0.0336, -0.1985, -0.0753, 14.9437
+        A2, B2, C2, D2 = 0.1520,  0.7350, -0.6703, 87.2099
 
         # 控制增益與最大角速度
         alpha = 0.0571    # rad/s per cm
@@ -123,7 +123,7 @@ class WheelControlNode(DTROS):
 
         # 4) 限制 omega 在 ±omega_max 內（使用 tanh 平滑飽和）
         omega = omega_max * math.tanh(raw_omega / omega_max)
-
+        print("Tanh")
         print(f"dest     = {d_est:.2f} cm")
         print(f"yaw_err   = {yaw_err_deg:.2f}° → {yaw_err:.4f} rad")
         print(f"omega     = {omega:.4f} rad/s")

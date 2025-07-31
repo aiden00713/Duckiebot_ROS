@@ -25,7 +25,7 @@ class WheelControlNode(DTROS):
         self.right_angle = 0
 
         # PID 控制器（單一控制器處理合併誤差）
-        self.combined_pid = PIDController(kp=0.4, ki=0.01, kd=0.1) 
+        self.combined_pid = PIDController(kp=0.2, ki=0.01, kd=0.1) 
         self.omega_max = 0.4  # 最大角速度限制
 
         # 關閉時停止
@@ -68,8 +68,8 @@ class WheelControlNode(DTROS):
 
     def calculate_combined_adjustment(self, offset, left_angle, right_angle):
         # 線性回歸模型估計 d_est 和 yaw
-        A1, B1, C1, D1 = 0.0297, -0.1831, -0.0497, 12.6796
-        A2, B2, C2, D2 = 0.1589,  0.7349, -0.7358, 90.5100
+        A1, B1, C1, D1 = 0.0336, -0.1985, -0.0753, 14.9437
+        A2, B2, C2, D2 = 0.1520,  0.7350, -0.6703, 87.2099
 
         d_est = A1 * offset + B1 * left_angle + C1 * right_angle + D1        # cm
         angle_est = A2 * offset + B2 * left_angle + C2 * right_angle + D2    # deg

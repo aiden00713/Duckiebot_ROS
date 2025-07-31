@@ -495,7 +495,7 @@ class CameraReaderNode(DTROS):
         offset = center_x - lane_center
 
         # 如果偏移量超過閾值，才進行修正
-        if abs(offset) > 20:
+        if abs(offset) >= 5:
             fix_offset = offset
         else:
             fix_offset = 0  # 偏移量在範圍內，不修正
@@ -706,10 +706,10 @@ class CameraReaderNode(DTROS):
         # Display the processed image
         cv2.namedWindow(self._window, cv2.WINDOW_AUTOSIZE)
         #cv2.namedWindow(self._window2, cv2.WINDOW_AUTOSIZE)
-        cv2.namedWindow(self._window3, cv2.WINDOW_AUTOSIZE)
+        #cv2.namedWindow(self._window3, cv2.WINDOW_AUTOSIZE)
         cv2.imshow(self._window, processed_image)
         #cv2.imshow(self._window2, self.detect_stop_line(image.copy()))
-        cv2.imshow(self._window3, shrinking_image)
+        #cv2.imshow(self._window3, shrinking_image)
         cv2.waitKey(1)
 
         self.rate.sleep()
